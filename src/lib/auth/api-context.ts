@@ -82,7 +82,38 @@ export async function requireApiKey(
   scope?: ApiScope
 ): Promise<ApiKeyContext> {
   const presented = extractKey(request);
-  if (!presented || !looksLikeApiKey(presented)) {
+  if (!presented) {
+    throw unauthorized();
+  }
+
+  // Support server-side WACRM_API_KEY environment variable (e.g. for FastAPI calls)
+  const serverApiKey = process.env.WACRM_API_KEY;
+  if (serverApiKey && presented === serverApiKey) {
+    const admin = supabaseAdmin();
+    let accountId = "00000000-0000-0000-0000-000000000000";
+    try {
+      const { data: acc } = await admin
+        .from("accounts")
+        .select("id")
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (acc?.id) accountId = acc.id;
+    } catch {
+      // fallback to default
+    }
+
+    return {
+      authType: "api_key",
+      supabase: admin,
+      accountId,
+      keyId: "server-env-key",
+      scopes: ["messages:send", "messages:write", "contacts:read", "contacts:write"],
+      createdBy: null,
+    };
+  }
+
+  if (!looksLikeApiKey(presented)) {
     throw unauthorized();
   }
 

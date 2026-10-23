@@ -91,16 +91,21 @@ describe("Workflow api_request: executeApiRequestNode", () => {
 
   const mockRun: FlowRunRow = {
     id: "run-1",
-    account_id: "acc-1",
     flow_id: "flow-1",
+    account_id: "acc-1",
+    user_id: "user-1",
     contact_id: "c1",
     conversation_id: "conv-1",
     status: "active",
     current_node_key: "node-api",
-    variables: {},
     transition_seq: 0,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    last_prompt_message_id: null,
+    vars: {},
+    reprompt_count: 0,
+    started_at: new Date().toISOString(),
+    last_advanced_at: new Date().toISOString(),
+    ended_at: null,
+    end_reason: null,
   };
 
   const mockNode: FlowNodeRow = {
