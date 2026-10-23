@@ -43,7 +43,9 @@ import { decideFallback, resolveFallbackPolicy } from "./fallback";
 import { addContactTagAndDispatch } from "@/lib/contacts/tag-events";
 import { removeContactTag } from "@/lib/contacts/tag-write";
 import { checkRunTimeout, markRunTimedOut, type RunTimeoutCheck } from "./timeout";
+import { isDeliverableUrl } from "@/lib/webhooks/ssrf";
 import {
+  type ApiRequestNodeConfig,
   type CollectInputNodeConfig,
   type ConditionNodeConfig,
   type DispatchInboundInput,
@@ -579,27 +581,36 @@ async function evaluateConditionNode(
 }
 
 /**
- * Tiny `{{vars.foo}}` interpolation. Used by send_message + collect_input
- * prompt text so a captured `name` can show up in the next prompt
- * ("Thanks {{vars.name}}, what's your email?"). Missing vars render as
- * empty string — the same behavior as the automations engine.
+ * Tiny {{vars.foo}} and {{contact.foo}} interpolation.
+ * Supports dot-paths like {{vars.policy.number}} and contact fields.
  */
-function interpolateVars(template: string, vars: Record<string, unknown>): string {
+export function interpolateFlowString(
+  template: string,
+  vars: Record<string, unknown>,
+  contact?: { phone?: string; name?: string; email?: string; id?: string } | null,
+): string {
   if (!template) return "";
-  return template.replace(/\{\{vars\.([a-zA-Z0-9_]+)\}\}/g, (_, key) => {
-    const v = vars[key];
-    return v === undefined || v === null ? "" : String(v);
+  let res = template.replace(/\{\{vars\.([a-zA-Z0-9_.]+)\}\}/g, (_, key) => {
+    const parts = key.split(".");
+    let curr: any = vars;
+    for (const p of parts) {
+      if (curr === undefined || curr === null) break;
+      curr = curr[p];
+    }
+    return curr === undefined || curr === null ? "" : String(curr);
   });
+  res = res.replace(/\{\{contact\.([a-zA-Z0-9_]+)\}\}/g, (_, key) => {
+    if (!contact) return "";
+    const val = (contact as any)[key];
+    return val === undefined || val === null ? "" : String(val);
+  });
+  return res;
 }
 
-/**
- * `interpolateVars` for optional config fields (header_text, footer_text,
- * list section titles, row descriptions). An absent field stays absent
- * — `interpolateVars(undefined)` would return "" and meta-api treats
- * header/footer/description by truthiness, so "" is harmless there, but
- * keeping `undefined` means the payload we log and send matches what
- * the author configured rather than sprouting empty strings.
- */
+function interpolateVars(template: string, vars: Record<string, unknown>): string {
+  return interpolateFlowString(template, vars);
+}
+
 function interpolateOptionalVars(
   template: string | undefined,
   vars: Record<string, unknown>,
@@ -607,6 +618,157 @@ function interpolateOptionalVars(
   return template === undefined || template === null
     ? undefined
     : interpolateVars(template, vars);
+}
+
+/** Dot-path lookup in an object (supports 'policy.number' or 'records[0].due_date'). */
+export function getByPath(obj: any, path: string): unknown {
+  if (!obj || !path) return undefined;
+  const normalized = path.replace(/\[(\w+)\]/g, ".$1");
+  const keys = normalized.split(".");
+  let curr = obj;
+  for (const k of keys) {
+    if (curr === undefined || curr === null) return undefined;
+    curr = curr[k];
+  }
+  return curr;
+}
+
+function getAllowedWorkflowHosts(): string[] {
+  const allowed = new Set<string>();
+  if (process.env.FASTAPI_BASE_URL) {
+    try {
+      const host = new URL(process.env.FASTAPI_BASE_URL).hostname;
+      allowed.add(host.toLowerCase());
+    } catch {
+      // ignore
+    }
+  }
+  if (process.env.WORKFLOW_ALLOWED_HOSTS) {
+    for (const h of process.env.WORKFLOW_ALLOWED_HOSTS.split(",")) {
+      const trimmed = h.trim().toLowerCase();
+      if (trimmed) allowed.add(trimmed);
+    }
+  }
+  if (process.env.NODE_ENV !== "production") {
+    allowed.add("localhost");
+    allowed.add("127.0.0.1");
+  }
+  return Array.from(allowed);
+}
+
+export async function executeApiRequestNode(
+  db: AdminClient,
+  run: FlowRunRow,
+  node: FlowNodeRow,
+  cfg: ApiRequestNodeConfig,
+): Promise<{ next_node_key: string }> {
+  let contact: { phone?: string; name?: string; email?: string; id?: string } | null = null;
+  if (run.contact_id) {
+    const { data: c } = await db
+      .from("contacts")
+      .select("id, phone, name, email")
+      .eq("id", run.contact_id)
+      .maybeSingle();
+    if (c) contact = c;
+  }
+
+  const url = interpolateFlowString(cfg.url, run.vars, contact);
+  const body = cfg.body ? interpolateFlowString(cfg.body, run.vars, contact) : undefined;
+
+  const headers: Record<string, string> = {};
+  if (cfg.headers) {
+    for (const [k, v] of Object.entries(cfg.headers)) {
+      headers[k] = interpolateFlowString(v, run.vars, contact);
+    }
+  }
+
+  const fastApiBase = process.env.FASTAPI_BASE_URL;
+  const serviceToken = process.env.FASTAPI_SERVICE_TOKEN;
+  if (serviceToken && fastApiBase && url.startsWith(fastApiBase)) {
+    const hasAuth = Object.keys(headers).some(
+      (h) => h.toLowerCase() === "x-service-token" || h.toLowerCase() === "authorization",
+    );
+    if (!hasAuth) {
+      headers["X-Service-Token"] = serviceToken;
+    }
+  }
+
+  const allowedHosts = getAllowedWorkflowHosts();
+  const isSafe = await isDeliverableUrl(url, { allowPrivateHosts: allowedHosts });
+  if (!isSafe) {
+    await logEvent(db, run.id, "error", node.node_key, {
+      reason: "api_request_ssrf_rejected",
+      url,
+    });
+    return { next_node_key: cfg.failure_next };
+  }
+
+  const timeoutMs = Math.min(cfg.timeout_ms || 10000, 30000);
+  try {
+    const method = cfg.method || "GET";
+    const res = await fetch(url, {
+      method,
+      headers: {
+        Accept: "application/json",
+        ...(body ? { "Content-Type": "application/json" } : {}),
+        ...headers,
+      },
+      body: ["GET", "HEAD"].includes(method) ? undefined : body,
+      signal: AbortSignal.timeout(timeoutMs),
+      redirect: "manual",
+    });
+
+    if (!res.ok) {
+      await logEvent(db, run.id, "error", node.node_key, {
+        reason: "api_request_http_error",
+        status: res.status,
+        statusText: res.statusText,
+        url,
+      });
+      return { next_node_key: cfg.failure_next };
+    }
+
+    let responseData: unknown = null;
+    const contentType = res.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      responseData = await res.json();
+    } else {
+      const text = await res.text();
+      try {
+        responseData = JSON.parse(text);
+      } catch {
+        responseData = { text };
+      }
+    }
+
+    if (cfg.response_mapping && responseData && typeof responseData === "object") {
+      const updatedVars = { ...run.vars };
+      for (const [targetKey, jsonPath] of Object.entries(cfg.response_mapping)) {
+        const extracted = getByPath(responseData, jsonPath);
+        if (extracted !== undefined) {
+          updatedVars[targetKey] = extracted;
+        }
+      }
+      run.vars = updatedVars;
+      await db.from("flow_runs").update({ vars: updatedVars }).eq("id", run.id);
+    }
+
+    await logEvent(db, run.id, "node_entered", node.node_key, {
+      outcome: "api_request_success",
+      status: res.status,
+      url,
+      extracted_keys: cfg.response_mapping ? Object.keys(cfg.response_mapping) : [],
+    });
+
+    return { next_node_key: cfg.success_next };
+  } catch (err) {
+    await logEvent(db, run.id, "error", node.node_key, {
+      reason: "api_request_failed",
+      detail: err instanceof Error ? err.message : String(err),
+      url,
+    });
+    return { next_node_key: cfg.failure_next };
+  }
 }
 
 async function endRun(
@@ -823,6 +985,12 @@ async function advanceFromNodeKey(
         });
       }
       currentKey = cfg.next_node_key;
+      continue;
+    }
+    if (node.node_type === "api_request") {
+      const cfg = node.config as unknown as ApiRequestNodeConfig;
+      const res = await executeApiRequestNode(db, run, node, cfg);
+      currentKey = res.next_node_key;
       continue;
     }
     if (node.node_type === "send_buttons") {
