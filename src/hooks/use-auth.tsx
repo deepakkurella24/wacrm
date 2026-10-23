@@ -293,6 +293,51 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           );
         }
       } else {
+        // Auto-bootstrap personal account + profile if none exists yet (e.g. fresh Neon database)
+        try {
+          const { data: newAccount } = await supabase
+            .from("accounts")
+            .insert({ name: "Insurance Agency", owner_user_id: userId })
+            .select("id, name, default_currency")
+            .single();
+
+          if (newAccount) {
+            const { data: newProfile } = await supabase
+              .from("profiles")
+              .insert({
+                user_id: userId,
+                email: "agent@insurance.local",
+                full_name: "Insurance Agent",
+                account_id: newAccount.id,
+                account_role: "owner",
+              })
+              .select("id, full_name, email, avatar_url, role, beta_features, account_id, account_role")
+              .single();
+
+            if (newProfile) {
+              setProfile({
+                id: newProfile.id,
+                full_name: newProfile.full_name,
+                email: newProfile.email,
+                avatar_url: newProfile.avatar_url,
+                role: newProfile.role,
+                beta_features: newProfile.beta_features ?? [],
+                account_id: newAccount.id,
+                account_role: "owner",
+              });
+              setAccount({
+                id: newAccount.id,
+                name: newAccount.name,
+                default_currency: newAccount.default_currency ?? DEFAULT_CURRENCY,
+              });
+              setStatusDetail(null);
+              return;
+            }
+          }
+        } catch (bootstrapErr) {
+          console.warn("[AuthProvider] auto-provision failed:", bootstrapErr);
+        }
+
         lastFetchedUserIdRef.current = null;
         setStatusDetail("no profiles row for the signed-in user");
       }

@@ -109,18 +109,35 @@ export interface AccountContext {
 export async function getCurrentAccount(): Promise<AccountContext> {
   const supabase = await createClient();
 
-  const {
-    data: { user },
-    error: userErr,
-  } = await supabase.auth.getUser();
-  if (userErr || !user) {
-    throw new UnauthorizedError();
+  let resolvedUserId: string | null = null;
+
+  if (process.env.CLERK_SECRET_KEY) {
+    try {
+      const { auth } = await import("@clerk/nextjs/server");
+      const clerk = await auth();
+      if (clerk?.userId) {
+        resolvedUserId = clerk.userId;
+      }
+    } catch {
+      // Fall through to standard auth
+    }
+  }
+
+  if (!resolvedUserId) {
+    const {
+      data: { user },
+      error: userErr,
+    } = await supabase.auth.getUser();
+    if (userErr || !user) {
+      throw new UnauthorizedError();
+    }
+    resolvedUserId = user.id;
   }
 
   const { data, error } = await supabase
     .from("profiles")
     .select("account_id, account_role")
-    .eq("user_id", user.id)
+    .eq("user_id", resolvedUserId)
     .maybeSingle();
 
   if (error) {
@@ -168,7 +185,7 @@ export async function getCurrentAccount(): Promise<AccountContext> {
 
   return {
     supabase,
-    userId: user.id,
+    userId: resolvedUserId,
     accountId: data.account_id,
     role: data.account_role,
     account: { id: account.id, name: account.name },
