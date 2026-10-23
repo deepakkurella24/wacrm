@@ -284,3 +284,40 @@ A ready-to-import definition is provided at `docs/insurance-policy-workflow.json
   ```bash
   pg_dump "$DATABASE_URL" > wacrm_backup.sql
   ```
+
+---
+
+## 11. Hardcoded Trigger: "Renewals on My Number"
+
+### How It Works
+1. **Trigger Matching**:
+   - Matches incoming WhatsApp messages matching `"Renewals on My Number"` (case-insensitive, handles whitespace and leading/trailing punctuation).
+   - Rejects unrelated or conversational sentences containing similar words.
+2. **Verified Sender Identification**:
+   - Uses the Meta-verified incoming WhatsApp sender phone number (`message.from` / `contact.phone`).
+   - Does NOT trust arbitrary numbers provided in the text.
+3. **FastAPI Lookup**:
+   - Queries `GET /api/v1/integrations/renewals-by-phone?phone={phone}` with `X-Service-Token`.
+   - Returns structured JSON of all registered vehicles and their latest renewals.
+4. **Response Formatting**:
+   ```
+   Your Vehicle Renewal Details
+
+   1. AP20BA1232 – Model
+   Payment status: ✅ Payment completed
+   Policy document: [actual document URL]
+
+   2. AP22BC1222 – Model
+   Payment status: ⏳ Payment pending
+   Balance due: ₹12,500
+   Payment link: [actual customer-facing payment URL]
+
+   ⚠️ Policy document links expire in 5 minutes. Please download your document immediately.
+   ```
+5. **Genuinely Expiring Document Links**:
+   - Policy document URLs route through `/api/v1/integrations/document-download?token={token}` using an HMAC-SHA256 signature and a 300-second expiration.
+   - When accessed after 5 minutes, returns `HTTP 410 Gone` with instructions to request a fresh link.
+   - The expiry notice is appended **only** when at least one policy document link is present in the response.
+6. **Client-Configurable Triggers**:
+   - All other keyword triggers (e.g. greetings, address, website) remain fully configurable by the client via the visual Flow Builder (`/flows`) without touching code.
+
