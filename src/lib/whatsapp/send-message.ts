@@ -35,6 +35,7 @@ import {
   type InteractiveMessagePayload,
 } from '@/lib/whatsapp/interactive';
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption';
+import { resolveMetaCredentials } from '@/lib/whatsapp/meta-credentials';
 import { supabaseAdmin } from '@/lib/flows/admin-client';
 import {
   phoneVariants,
@@ -258,38 +259,17 @@ export async function sendMessageToConversation(
   const hasValidPhone = resolvedTarget.isPhone;
   const sanitizedPhone = hasValidPhone ? sendTarget : '';
 
-  // WhatsApp config, account-scoped.
-  const { data: config, error: configError } = await db
-    .from('whatsapp_config')
-    .select('*')
-    .eq('account_id', accountId)
-    .single();
-
-  if (configError || !config) {
+  // WhatsApp credentials: environment variables first, then whatsapp_config
+  const creds = await resolveMetaCredentials(db, accountId);
+  if (!creds) {
     throw new SendMessageError(
       'whatsapp_not_configured',
-      'WhatsApp not configured. Please set up your WhatsApp integration first.',
+      'WhatsApp not configured. Please set META_ACCESS_TOKEN and META_PHONE_NUMBER_ID server-side environment variables.',
       400
     );
   }
 
-  const accessToken = decrypt(config.access_token);
-
-  // Self-heal legacy CBC ciphertexts. Fire-and-forget; idempotent.
-  if (isLegacyFormat(config.access_token)) {
-    void db
-      .from('whatsapp_config')
-      .update({ access_token: encrypt(accessToken) })
-      .eq('id', config.id)
-      .then(({ error }: { error: { message: string } | null }) => {
-        if (error) {
-          console.warn(
-            '[send-message] access_token GCM upgrade failed:',
-            error.message
-          );
-        }
-      });
-  }
+  const { accessToken, phoneNumberId } = creds;
 
   // Resolve the reply target to its Meta message_id. The parent must
   // belong to this same conversation — otherwise a caller could quote
@@ -346,7 +326,7 @@ export async function sendMessageToConversation(
   const attempt = async (phone: string): Promise<string> => {
     if (messageType === 'template') {
       const result = await sendTemplateMessage({
-        phoneNumberId: config.phone_number_id,
+        phoneNumberId: phoneNumberId,
         accessToken,
         to: phone,
         templateName: templateName!,
@@ -360,7 +340,7 @@ export async function sendMessageToConversation(
     }
     if (isMediaKind) {
       const result = await sendMediaMessage({
-        phoneNumberId: config.phone_number_id,
+        phoneNumberId: phoneNumberId,
         accessToken,
         to: phone,
         kind: messageType as MediaKind,
@@ -375,7 +355,7 @@ export async function sendMessageToConversation(
       const p = interactivePayload!;
       if (p.kind === 'buttons') {
         const result = await sendInteractiveButtons({
-          phoneNumberId: config.phone_number_id,
+          phoneNumberId: phoneNumberId,
           accessToken,
           to: phone,
           bodyText: p.body,
@@ -387,7 +367,7 @@ export async function sendMessageToConversation(
         return result.messageId;
       }
       const result = await sendInteractiveList({
-        phoneNumberId: config.phone_number_id,
+        phoneNumberId: phoneNumberId,
         accessToken,
         to: phone,
         bodyText: p.body,
@@ -400,7 +380,7 @@ export async function sendMessageToConversation(
       return result.messageId;
     }
     const result = await sendTextMessage({
-      phoneNumberId: config.phone_number_id,
+      phoneNumberId: phoneNumberId,
       accessToken,
       to: phone,
       text: contentText!,

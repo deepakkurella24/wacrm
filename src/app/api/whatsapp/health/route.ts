@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
 import { decrypt } from '@/lib/whatsapp/encryption'
+import { resolveMetaCredentials } from '@/lib/whatsapp/meta-credentials'
 import { getPhoneNumberHealth } from '@/lib/whatsapp/meta-api'
 import {
   parseMessagingLimit,
@@ -28,20 +29,15 @@ export async function GET() {
     const limit = checkRateLimit(`whatsapp-health:${userId}`, RATE_LIMITS.whatsappHealth)
     if (!limit.success) return rateLimitResponse(limit)
 
-    const { data: config } = await supabase
-      .from('whatsapp_config')
-      .select('phone_number_id, access_token, status')
-      .eq('account_id', accountId)
-      .maybeSingle()
-
-    if (!config || config.status !== 'connected' || !config.phone_number_id) {
+    const creds = await resolveMetaCredentials(supabase, accountId)
+    if (!creds || !creds.phoneNumberId || !creds.accessToken) {
       return reply({ state: 'disconnected', ...EMPTY })
     }
 
     try {
       const info = await getPhoneNumberHealth({
-        phoneNumberId: config.phone_number_id,
-        accessToken: decrypt(config.access_token),
+        phoneNumberId: creds.phoneNumberId,
+        accessToken: creds.accessToken,
       })
       return reply({
         state: 'connected',

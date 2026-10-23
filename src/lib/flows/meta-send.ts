@@ -41,21 +41,19 @@ const t = getT('LibErrors')
  * home for that decrypt step — callers outside this file (the AI
  * auto-reply's typing indicator) reuse it rather than growing a copy.
  */
+import { resolveMetaCredentials } from '@/lib/whatsapp/meta-credentials'
+
 export async function loadAccountMetaCredentials(
   db: ReturnType<typeof supabaseAdmin>,
   accountId: string,
 ): Promise<{ phoneNumberId: string; accessToken: string }> {
-  const { data: config, error: configErr } = await db
-    .from('whatsapp_config')
-    .select('phone_number_id, access_token')
-    .eq('account_id', accountId)
-    .single()
-  if (configErr || !config) {
+  const creds = await resolveMetaCredentials(db, accountId)
+  if (!creds) {
     throw new Error(t('send.notConfigured'))
   }
   return {
-    phoneNumberId: config.phone_number_id,
-    accessToken: decrypt(config.access_token),
+    phoneNumberId: creds.phoneNumberId,
+    accessToken: creds.accessToken,
   }
 }
 

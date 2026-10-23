@@ -8,13 +8,12 @@ import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
 import { THEMES } from '@/lib/themes';
-import { CURRENCIES } from '@/lib/currency';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 
 import { SECTION_META, type SettingsSection } from './settings-sections';
-import { SettingsChip, StatusDot } from './settings-chip';
+import { SettingsChip } from './settings-chip';
 import { ROLE_META } from './role-meta';
 
 interface OverviewCounts {
@@ -26,18 +25,12 @@ interface OverviewCounts {
   customFields: number | null;
 }
 
-interface WhatsAppStatus {
-  configured: boolean;
-  connected: boolean;
-}
-
 export function SettingsOverview({
   onSelect,
 }: {
   onSelect: (section: SettingsSection) => void;
 }) {
-  const { user, profile, accountId, accountRole, defaultCurrency, canManageMembers } =
-    useAuth();
+  const { user, profile, accountId, accountRole } = useAuth();
   const { mode, theme } = useTheme();
   const t = useTranslations('Settings.overview');
   const tRoles = useTranslations('Settings.roles');
@@ -45,12 +38,6 @@ export function SettingsOverview({
 
   const [counts, setCounts] = useState<OverviewCounts | null>(null);
   const [countsLoading, setCountsLoading] = useState(true);
-  // WhatsApp status is tracked separately: its health check decrypts the
-  // token and pings Meta, which is far slower than the cheap count
-  // queries. Gating it independently keeps a slow/flaky Meta round-trip
-  // from blanking the rest of the landing.
-  const [whatsapp, setWhatsapp] = useState<WhatsAppStatus | null>(null);
-  const [whatsappLoading, setWhatsappLoading] = useState(true);
 
   useEffect(() => {
     if (!user || !accountId) return;
@@ -62,14 +49,8 @@ export function SettingsOverview({
     // Cheap counts — resolve fast, render immediately.
     (async () => {
       setCountsLoading(true);
-      const [membersRes, invitesRes, templatesTotal, templatesPending, tagsRes, fieldsRes] =
+      const [templatesTotal, templatesPending, tagsRes, fieldsRes] =
         await Promise.allSettled([
-          fetch('/api/account/members', { cache: 'no-store' }).then((r) => r.json()),
-          canManageMembers
-            ? fetch('/api/account/invitations', { cache: 'no-store' }).then((r) =>
-                r.json(),
-              )
-            : Promise.resolve(null),
           supabase
             .from('message_templates')
             .select('id', { count: 'exact', head: true })
@@ -88,20 +69,9 @@ export function SettingsOverview({
 
       if (cancelled) return;
 
-      const members =
-        membersRes.status === 'fulfilled' && Array.isArray(membersRes.value?.members)
-          ? membersRes.value.members.length
-          : null;
-      const pendingInvites =
-        invitesRes.status === 'fulfilled' &&
-        invitesRes.value &&
-        Array.isArray(invitesRes.value.invitations)
-          ? invitesRes.value.invitations.length
-          : null;
-
       setCounts({
-        members,
-        pendingInvites,
+        members: null,
+        pendingInvites: null,
         templates:
           templatesTotal.status === 'fulfilled'
             ? templatesTotal.value.count ?? null
@@ -117,74 +87,25 @@ export function SettingsOverview({
       setCountsLoading(false);
     })();
 
-    // WhatsApp connection status — slower, independent.
-    (async () => {
-      setWhatsappLoading(true);
-      const [row, health] = await Promise.allSettled([
-        supabase
-          .from('whatsapp_config')
-          .select('phone_number_id')
-          .eq('account_id', acctId)
-          .maybeSingle(),
-        fetch('/api/whatsapp/config', { cache: 'no-store' }).then((r) => r.json()),
-      ]);
-      if (cancelled) return;
-      setWhatsapp({
-        configured: row.status === 'fulfilled' && !!row.value.data?.phone_number_id,
-        connected: health.status === 'fulfilled' && !!health.value?.connected,
-      });
-      setWhatsappLoading(false);
-    })();
-
     return () => {
       cancelled = true;
     };
-  }, [user?.id, accountId, canManageMembers]);
+  }, [user?.id, accountId]);
 
   const displayName = profile?.full_name || profile?.email || t('yourAccount');
   const initial = (profile?.full_name || profile?.email || 'U').charAt(0).toUpperCase();
   const roleMeta = accountRole ? ROLE_META[accountRole] : null;
   const RoleIcon = roleMeta?.icon;
 
-  const currencyLabel =
-    CURRENCIES.find((c) => c.code === defaultCurrency)?.label ?? defaultCurrency;
   const themeName = THEMES.find((t) => t.id === theme)?.name ?? theme;
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-  // Per-tile loading + subtitle. `null` counts render as a graceful
-  // fallback so a single failed query never blanks a tile.
+  // Per-tile loading + subtitle.
   const tiles: {
     section: SettingsSection;
     loading: boolean;
     subtitle: ReactNode;
   }[] = [
-    {
-      section: 'whatsapp',
-      loading: whatsappLoading,
-      subtitle: !whatsapp?.configured ? (
-        t('notSetup')
-      ) : whatsapp.connected ? (
-        <>
-          <StatusDot tone="ok" /> {t('connected')}
-        </>
-      ) : (
-        <>
-          <StatusDot tone="muted" /> {t('needsReconnecting')}
-        </>
-      ),
-    },
-    {
-      section: 'members',
-      loading: countsLoading,
-      subtitle:
-        counts?.members == null
-          ? t('viewTeamMembers')
-          : `${t('membersCount', { count: counts.members })}${
-              counts.pendingInvites
-                ? ` · ${t('pendingInvites', { count: counts.pendingInvites })}`
-                : ''
-            }`,
-    },
     {
       section: 'templates',
       loading: countsLoading,
@@ -198,9 +119,9 @@ export function SettingsOverview({
             }`,
     },
     {
-      section: 'deals',
+      section: 'quick-replies',
       loading: false,
-      subtitle: `${defaultCurrency} — ${currencyLabel}`,
+      subtitle: 'Manage canned responses for fast agent replies',
     },
     {
       section: 'fields',
@@ -216,6 +137,11 @@ export function SettingsOverview({
       section: 'appearance',
       loading: false,
       subtitle: t('appearance', { mode: cap(mode), theme: themeName }),
+    },
+    {
+      section: 'api',
+      loading: false,
+      subtitle: 'API keys for machine-to-machine integrations',
     },
   ];
 

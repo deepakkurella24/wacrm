@@ -179,41 +179,20 @@ function InboxPageInner() {
     }
   }, []);
 
-  // Check WhatsApp connection status on mount
+  // Check WhatsApp connection status on mount via server-side health check
   useEffect(() => {
     const checkConnection = async () => {
-      const supabase = createClient();
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const user = session?.user;
-
-      if (!user) return;
-
-      // whatsapp_config is one-row-per-account post-multi-user, so
-      // the previous `.eq('user_id', user.id)` would miss the row
-      // for any teammate who didn't personally save the config —
-      // the "WhatsApp not connected" banner would show in the
-      // shared inbox even though the admin had it configured.
-      // Resolve account_id via the profile and query by that.
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("account_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      const accountId = profile?.account_id as string | undefined;
-      if (!accountId) {
+      try {
+        const res = await fetch("/api/whatsapp/health", { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          setWhatsappConnected(data.state === "connected");
+        } else {
+          setWhatsappConnected(false);
+        }
+      } catch {
         setWhatsappConnected(false);
-        return;
       }
-
-      const { data } = await supabase
-        .from("whatsapp_config")
-        .select("status")
-        .eq("account_id", accountId)
-        .maybeSingle();
-
-      setWhatsappConnected(data?.status === "connected");
     };
 
     checkConnection();

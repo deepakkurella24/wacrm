@@ -159,7 +159,16 @@ export async function GET(request: Request) {
       )
     }
 
-    // Fetch all whatsapp configs to check verify tokens
+    // Check server-side environment variable first
+    const envVerifyToken = process.env.META_WEBHOOK_VERIFY_TOKEN?.trim()
+    if (envVerifyToken && verifyTokenMatches(envVerifyToken, verifyToken)) {
+      return new Response(challenge, {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })
+    }
+
+    // Fall back to whatsapp_config rows for backwards-compatibility
     const { data: configs, error: configError } = await supabaseAdmin()
       .from('whatsapp_config')
       .select('id, verify_token')
@@ -281,6 +290,18 @@ async function resolveAccountForPhoneNumber(
   phoneNumberId: string | undefined
 ): Promise<string | null> {
   if (!phoneNumberId) return null
+
+  const envPhoneId = process.env.META_PHONE_NUMBER_ID?.trim()
+  if (envPhoneId && phoneNumberId === envPhoneId) {
+    const { data: acct } = await supabaseAdmin()
+      .from('accounts')
+      .select('id')
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle()
+    if (acct?.id) return acct.id
+  }
+
   const { data, error } = await supabaseAdmin()
     .from('whatsapp_config')
     .select('account_id')
@@ -290,10 +311,7 @@ async function resolveAccountForPhoneNumber(
     console.error('Error resolving account for status update:', phoneNumberId, error)
     return null
   }
-  if (!data || data.length !== 1) {
-    console.error(
-      `Status update for phone_number_id ${phoneNumberId} matched ${data?.length ?? 0} configs; message statuses skipped`
-    )
+  if (!data || data.length === 0) {
     return null
   }
   return data[0].account_id
@@ -346,44 +364,59 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
 
       const phoneNumberId = value.metadata.phone_number_id
 
-      // Find user's config by phone_number_id. `.single()` returns
-      // PGRST116 for both 0 rows AND ≥2 rows — distinguish them so
-      // operators see the real cause in logs. ≥2 rows shouldn't happen
-      // post-migration 013 (UNIQUE constraint), but a row created
-      // before the constraint, or a race, would still surface here.
-      const { data: configRows, error: configError } = await supabaseAdmin()
-        .from('whatsapp_config')
-        .select('*')
-        .eq('phone_number_id', phoneNumberId)
+      let targetAccountId: string | null = null
+      let targetUserId: string | null = null
+      let decryptedAccessToken: string | null = null
+      let mirrorMedia = true
 
-      if (configError) {
-        console.error(
-          'Error fetching whatsapp_config for phone_number_id:',
-          phoneNumberId,
-          configError
-        )
-        continue
+      const envPhoneId = process.env.META_PHONE_NUMBER_ID?.trim()
+      const envAccessToken = process.env.META_ACCESS_TOKEN?.trim()
+
+      if (envPhoneId && envAccessToken && (!phoneNumberId || phoneNumberId === envPhoneId)) {
+        const { data: acct } = await supabaseAdmin()
+          .from('accounts')
+          .select('id, owner_user_id')
+          .order('created_at', { ascending: true })
+          .limit(1)
+          .maybeSingle()
+        if (acct?.id) {
+          targetAccountId = acct.id
+          targetUserId = acct.owner_user_id || 'system'
+          decryptedAccessToken = envAccessToken
+        }
       }
 
-      if (!configRows || configRows.length === 0) {
-        console.error('No config found for phone_number_id:', phoneNumberId)
-        continue
+      if (!targetAccountId) {
+        // Fall back to database config
+        const { data: configRows, error: configError } = await supabaseAdmin()
+          .from('whatsapp_config')
+          .select('*')
+          .eq('phone_number_id', phoneNumberId)
+
+        if (configError) {
+          console.error(
+            'Error fetching whatsapp_config for phone_number_id:',
+            phoneNumberId,
+            configError
+          )
+          continue
+        }
+
+        if (!configRows || configRows.length === 0) {
+          console.error('No config found for phone_number_id:', phoneNumberId)
+          continue
+        }
+
+        const config = configRows[0]
+        targetAccountId = config.account_id
+        targetUserId = config.user_id
+        decryptedAccessToken = decrypt(config.access_token)
+        mirrorMedia = config.mirror_inbound_media !== false
       }
 
-      if (configRows.length > 1) {
-        console.error(
-          `Multiple configs (${configRows.length}) found for phone_number_id:`,
-          phoneNumberId,
-          '— inbound message dropped. Resolve duplicates so each number maps to a single account.',
-          'Account owners:',
-          configRows.map((r: { account_id: string; user_id: string }) => `${r.account_id} (admin ${r.user_id})`)
-        )
+      if (!targetAccountId || !decryptedAccessToken) {
         continue
       }
-
-      const config = configRows[0]
-
-      const decryptedAccessToken = decrypt(config.access_token)
 
       for (let i = 0; i < value.messages.length; i++) {
         const message = value.messages[i]
@@ -392,18 +425,10 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
         await processMessage(
           message,
           contact,
-          // Tenancy — drives every contact / conversation lookup
-          // and the engines' active-row dispatch.
-          config.account_id,
-          // Audit / sender-of-record — used as the user_id on row
-          // inserts that need it for NOT NULL FK compliance. Always
-          // the admin who saved the WhatsApp config.
-          config.user_id,
-          decryptedAccessToken,
-          // Default ON: the column is NOT NULL DEFAULT TRUE, but a row
-          // read before migration 039 lands would have it undefined,
-          // and losing attachments is the failure mode worth avoiding.
-          config.mirror_inbound_media !== false
+          targetAccountId,
+          targetUserId || 'system',
+          decryptedAccessToken!,
+          mirrorMedia
         )
       }
     }

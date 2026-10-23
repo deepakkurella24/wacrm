@@ -6,6 +6,7 @@ import {
   toErrorResponse,
 } from '@/lib/auth/account'
 import { decrypt } from '@/lib/whatsapp/encryption'
+import { resolveMetaCredentials } from '@/lib/whatsapp/meta-credentials'
 import { normalizeStatus } from '@/lib/whatsapp/template-status-normalize'
 import type { TemplateButton, TemplateSampleValues } from '@/types'
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
@@ -142,38 +143,25 @@ export async function POST() {
     const limit = checkRateLimit(`whatsapp-admin:${userId}`, RATE_LIMITS.whatsappAdmin)
     if (!limit.success) return rateLimitResponse(limit)
 
-    const { data: config, error: configError } = await supabase
-      .from('whatsapp_config')
-      .select('*')
-      .eq('account_id', accountId)
-      .single()
+    const creds = await resolveMetaCredentials(supabase, accountId)
 
-    if (configError || !config) {
+    if (!creds || !creds.wabaId || !creds.accessToken) {
       return NextResponse.json(
         {
           error:
-            t('common.whatsappNotConfiguredConnect'),
+            'WhatsApp not configured or META_WABA_ID / META_ACCESS_TOKEN is missing.',
         },
         { status: 400 },
       )
     }
 
-    if (!config.waba_id) {
-      return NextResponse.json(
-        {
-          error:
-            t('common.wabaIdMissing'),
-        },
-        { status: 400 },
-      )
-    }
-
-    const accessToken = decrypt(config.access_token)
+    const accessToken = creds.accessToken
+    const wabaId = creds.wabaId
 
     const metaTemplates: MetaTemplate[] = []
     let nextUrl:
       | string
-      | null = `${META_API_BASE}/${config.waba_id}/message_templates?limit=100&fields=id,name,language,status,category,components,quality_score`
+      | null = `${META_API_BASE}/${wabaId}/message_templates?limit=100&fields=id,name,language,status,category,components,quality_score`
     const PAGE_CAP = 20
     let pageCount = 0
 

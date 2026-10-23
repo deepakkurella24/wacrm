@@ -34,12 +34,10 @@ import { TeamCard } from '@/components/dashboard/team-card'
 const POLL_MS = 60_000
 const REALTIME_DEBOUNCE_MS = 2_000
 
+import { redirect } from 'next/navigation'
+
 export default function DashboardPage() {
-  return (
-    <Suspense fallback={null}>
-      <DashboardPageInner />
-    </Suspense>
-  )
+  redirect('/inbox')
 }
 
 function DashboardPageInner() {
