@@ -1,0 +1,183 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { sendMessageToConversation } from '@/lib/whatsapp/send-message';
+
+export interface VehicleRenewalItem {
+  registration_number: string;
+  model?: string | null;
+  payment_status: 'PAID' | 'PARTIAL' | 'UNPAID' | 'NO_RENEWAL' | string;
+  balance_due?: number | null;
+  gross_premium?: number | null;
+  amount_paid?: number | null;
+  policy_document_url?: string | null;
+  payment_url?: string | null;
+}
+
+export interface RenewalsApiResponse {
+  found: boolean;
+  customer_name?: string | null;
+  phone?: string | null;
+  message?: string | null;
+  vehicles: VehicleRenewalItem[];
+}
+
+/**
+ * Match the hardcoded trigger "Renewals on My Number".
+ *
+ * Rules:
+ * - Case-insensitive
+ * - Collapses multiple whitespaces into a single space
+ * - Trims whitespace and strips common punctuation from ends
+ * - Strict exact match: does not trigger on unrelated sentences containing the words
+ */
+export function isRenewalsTrigger(rawText: string | null | undefined): boolean {
+  if (!rawText) return false;
+  const cleaned = rawText
+    .trim()
+    .toLowerCase()
+    .replace(/^[\s.,!?:;'"-]+|[\s.,!?:;'"-]+$/g, '')
+    .replace(/\s+/g, ' ');
+
+  return cleaned === 'renewals on my number';
+}
+
+/**
+ * Format a human-readable WhatsApp text message from the FastAPI renewals response.
+ * Follows exact specifications:
+ * - Numbered vehicle list
+ * - Accurate payment status
+ * - Balance due only when unpaid/partial and balance > 0
+ * - Policy document link only when available
+ * - Payment link only when unpaid/partial and available (customer-facing)
+ * - Appends 5-minute expiry notice ONLY if at least one document link exists
+ */
+export function formatRenewalsReply(data: RenewalsApiResponse): string {
+  if (!data.found || !data.vehicles || data.vehicles.length === 0) {
+    return 'No registered vehicles or policy renewals were found for your phone number. If you believe this is an error, please reply here with your vehicle registration number.';
+  }
+
+  const lines: string[] = ['Your Vehicle Renewal Details'];
+  let hasDocumentLink = false;
+
+  data.vehicles.forEach((veh, index) => {
+    lines.push(''); // Blank line separator
+    const num = index + 1;
+    const regNo = (veh.registration_number || 'UNKNOWN').trim();
+    const model = (veh.model || '').trim();
+    const header = model && model.toLowerCase() !== 'model' ? `${num}. ${regNo} – ${model}` : `${num}. ${regNo} – Model`;
+    lines.push(header);
+    lines.push('');
+
+    const statusUpper = (veh.payment_status || 'UNPAID').toUpperCase();
+    const isPaid = statusUpper === 'PAID';
+    const isPartial = statusUpper === 'PARTIAL';
+
+    if (isPaid) {
+      lines.push('Payment status: ✅ Payment completed');
+    } else if (isPartial) {
+      lines.push('Payment status: ⏳ Payment partial');
+    } else {
+      lines.push('Payment status: ⏳ Payment pending');
+    }
+
+    // Show balance due if applicable
+    const balance = veh.balance_due ?? 0;
+    if (!isPaid && balance > 0) {
+      lines.push('');
+      lines.push(`Balance due: ₹${balance.toLocaleString('en-IN')}`);
+    }
+
+    // Include policy-document link only when valid URL exists
+    if (veh.policy_document_url && veh.policy_document_url.trim()) {
+      lines.push('');
+      lines.push(`Policy document: ${veh.policy_document_url.trim()}`);
+      hasDocumentLink = true;
+    }
+
+    // Include customer-facing payment link only when unpaid and valid URL exists
+    if (!isPaid && veh.payment_url && veh.payment_url.trim()) {
+      lines.push('');
+      lines.push(`Payment link: ${veh.payment_url.trim()}`);
+    }
+  });
+
+  // Append 5-minute document-link expiry warning if any policy document exists
+  if (hasDocumentLink) {
+    lines.push('');
+    lines.push('⚠️ Policy document links expire in 5 minutes. Please download your document immediately.');
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Fetch customer renewal details from Application A (FastAPI).
+ */
+export async function fetchCustomerRenewals(phone: string): Promise<RenewalsApiResponse> {
+  const baseUrl = process.env.FASTAPI_BASE_URL;
+  if (!baseUrl) {
+    throw new Error('FASTAPI_BASE_URL environment variable is not configured');
+  }
+
+  const serviceToken = process.env.FASTAPI_SERVICE_TOKEN;
+  const url = `${baseUrl.replace(/\/+$/, '')}/api/v1/integrations/renewals-by-phone?phone=${encodeURIComponent(phone)}`;
+
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+  };
+  if (serviceToken) {
+    headers['X-Service-Token'] = serviceToken;
+    headers['Authorization'] = `Bearer ${serviceToken}`;
+  }
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers,
+    signal: AbortSignal.timeout(8000), // 8-second timeout
+  });
+
+  if (!response.ok) {
+    throw new Error(`FastAPI responded with HTTP ${response.status}`);
+  }
+
+  return (await response.json()) as RenewalsApiResponse;
+}
+
+export interface HandleRenewalsParams {
+  db: SupabaseClient;
+  accountId: string;
+  conversationId: string;
+  verifiedPhone: string;
+}
+
+/**
+ * Handle the "Renewals on My Number" trigger:
+ * 1. Queries FastAPI using the verified sender phone number
+ * 2. Formats response text with vehicles, payment status, balance, and expiring document URLs
+ * 3. Sends reply via Meta Cloud API and stores in conversation history
+ */
+export async function handleRenewalsTrigger(params: HandleRenewalsParams): Promise<boolean> {
+  const { db, accountId, conversationId, verifiedPhone } = params;
+
+  let replyText: string;
+  try {
+    const data = await fetchCustomerRenewals(verifiedPhone);
+    replyText = formatRenewalsReply(data);
+  } catch (err) {
+    console.error('[RenewalsTrigger] Failed to fetch customer renewals from FastAPI:', err);
+    // Safe fallback without exposing internal error messages or URLs
+    replyText =
+      'We are unable to retrieve your renewal details right now. Please try again in a few moments or reply here for assistance.';
+  }
+
+  try {
+    await sendMessageToConversation(db, accountId, {
+      conversationId,
+      messageType: 'text',
+      contentText: replyText,
+    });
+    return true;
+  } catch (err) {
+    console.error('[RenewalsTrigger] Failed to send renewals reply message:', err);
+    return false;
+  }
+}

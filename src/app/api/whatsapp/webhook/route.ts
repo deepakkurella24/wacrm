@@ -21,6 +21,7 @@ import {
 import { readCappedBody } from '@/lib/whatsapp/webhook-body'
 import { resumeAwaitingReply, runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
+import { isRenewalsTrigger, handleRenewalsTrigger } from '@/lib/integrations/renewals-service'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import {
@@ -824,34 +825,55 @@ async function processMessage(
   // no active flows take the runner's early-exit "no_match" path
   // basically for free (one indexed SELECT for the active run).
   // ============================================================
-  const flowResult = await dispatchInboundToFlows({
-    accountId,
-    userId: configOwnerUserId,
-    contactId: contactRecord.id,
-    conversationId: conversation.id,
-    message:
-      interactiveReplyId
-        ? {
-            kind: 'interactive_reply',
-            reply_id: interactiveReplyId,
-            reply_title: contentText ?? '',
-            meta_message_id: message.id,
-          }
-        : {
-            kind: 'text',
-            text: contentText ?? message.text?.body ?? '',
-            meta_message_id: message.id,
-          },
-    isFirstInboundMessage,
-  })
-  const flowConsumed = flowResult.consumed
-
-  // Fire any automations that react to this webhook event. All dispatches
-  // run here (not earlier) so the contact, conversation, and inbound
-  // message all exist before any step — including send_message — runs.
-  // Fire-and-forget: a slow or failing automation must not block the
-  // webhook's 200 OK response to Meta.
   const inboundText = contentText ?? message.text?.body ?? ''
+
+  // ============================================================
+  // Hardcoded Trigger: "Renewals on My Number"
+  // If matched, query FastAPI using verified sender phone, reply with
+  // vehicle details and 5-min expiring document URLs, and mark consumed.
+  // ============================================================
+  let flowConsumed = false
+  if (isRenewalsTrigger(inboundText)) {
+    const verifiedPhone = message.from || contactRecord.phone
+    if (verifiedPhone) {
+      const handled = await handleRenewalsTrigger({
+        db: supabaseAdmin(),
+        accountId,
+        conversationId: conversation.id,
+        verifiedPhone,
+      })
+      if (handled) {
+        flowConsumed = true
+      }
+    }
+  }
+
+  // ============================================================
+  // Flow runner dispatch (for client-configurable flows).
+  // ============================================================
+  if (!flowConsumed) {
+    const flowResult = await dispatchInboundToFlows({
+      accountId,
+      userId: configOwnerUserId,
+      contactId: contactRecord.id,
+      conversationId: conversation.id,
+      message:
+        interactiveReplyId
+          ? {
+              kind: 'interactive_reply',
+              reply_id: interactiveReplyId,
+              reply_title: contentText ?? '',
+              meta_message_id: message.id,
+            }
+          : {
+              kind: 'text',
+              text: inboundText,
+              meta_message_id: message.id,
+            },
+      isFirstInboundMessage,
+    })
+    flowConsumed = flowResult.consumed
+  }
 
   // An automation parked at a "wait for reply" Send Buttons / Send List
   // step takes this message as its reply — a tap or typed text — and
