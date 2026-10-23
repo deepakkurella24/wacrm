@@ -8,6 +8,12 @@ const h = vi.hoisted(() => ({
   dispatchInboundToAiReply: vi.fn(),
   dispatchWebhookEvent: vi.fn(),
   applyMessageStatus: vi.fn(),
+  isRenewalsTrigger: vi.fn(),
+  handleRenewalsTrigger: vi.fn(),
+  isGreeting: vi.fn(),
+  isMenuTrigger: vi.fn(),
+  handleMenuOrGreeting: vi.fn(),
+  handleFallbackMessage: vi.fn(),
   state: {
     // Result the message upsert's .select() resolves to. A genuine insert
     // returns the row; a replayed delivery conflicts and returns [].
@@ -276,6 +282,14 @@ vi.mock('@/lib/webhooks/deliver', () => ({
 vi.mock('@/lib/whatsapp/message-status-sync', () => ({
   applyMessageStatus: h.applyMessageStatus,
 }))
+vi.mock('@/lib/integrations/renewals-service', () => ({
+  isRenewalsTrigger: h.isRenewalsTrigger,
+  handleRenewalsTrigger: h.handleRenewalsTrigger,
+  isGreeting: h.isGreeting,
+  isMenuTrigger: h.isMenuTrigger,
+  handleMenuOrGreeting: h.handleMenuOrGreeting,
+  handleFallbackMessage: h.handleFallbackMessage,
+}))
 
 import { POST } from './route'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
@@ -400,6 +414,12 @@ beforeEach(() => {
   h.dispatchInboundToAiReply.mockResolvedValue(undefined)
   h.dispatchWebhookEvent.mockResolvedValue(undefined)
   h.applyMessageStatus.mockResolvedValue([])
+  h.isRenewalsTrigger.mockReturnValue(false)
+  h.handleRenewalsTrigger.mockResolvedValue(true)
+  h.isGreeting.mockReturnValue(false)
+  h.isMenuTrigger.mockReturnValue(false)
+  h.handleMenuOrGreeting.mockResolvedValue(true)
+  h.handleFallbackMessage.mockResolvedValue(false)
   h.runAutomationsForTrigger.mockImplementation(() => {
     h.state.automationStarted++
     return new Promise<void>((resolve) => {
@@ -1173,3 +1193,88 @@ describe('inbound webhook: first_inbound_message fires once', () => {
     expect(h.state.firstInboundClaims).toBe(0)
   })
 })
+
+describe('inbound webhook: insurance workflow dispatch and precedence', () => {
+  const triggersFired = () =>
+    h.runAutomationsForTrigger.mock.calls.map(
+      (call) => (call[0] as { triggerType: string }).triggerType,
+    )
+
+  it('dispatches "Renewals on My Number" to dedicated FastAPI integration and suppresses other flows/triggers', async () => {
+    h.isRenewalsTrigger.mockReturnValue(true)
+    await runWebhook({ ...TEXT_MESSAGE, text: { body: 'Renewals on My Number' } })
+
+    expect(h.handleRenewalsTrigger).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: 'acc-1',
+        conversationId: 'conv-1',
+        verifiedPhone: '15551230000',
+      }),
+    )
+    expect(h.dispatchInboundToFlows).not.toHaveBeenCalled()
+    expect(h.handleMenuOrGreeting).not.toHaveBeenCalled()
+    expect(h.handleFallbackMessage).not.toHaveBeenCalled()
+    expect(triggersFired()).not.toContain('keyword_match')
+    expect(triggersFired()).not.toContain('new_message_received')
+    expect(h.dispatchInboundToAiReply).not.toHaveBeenCalled()
+  })
+
+  it('dispatches client-configured flows when matched, suppressing menu/greeting/fallback', async () => {
+    h.dispatchInboundToFlows.mockResolvedValue({ consumed: true })
+    await runWebhook({ ...TEXT_MESSAGE, text: { body: 'claims' } })
+
+    expect(h.dispatchInboundToFlows).toHaveBeenCalledTimes(1)
+    expect(h.handleMenuOrGreeting).not.toHaveBeenCalled()
+    expect(h.handleFallbackMessage).not.toHaveBeenCalled()
+    expect(triggersFired()).not.toContain('keyword_match')
+    expect(triggersFired()).not.toContain('new_message_received')
+    expect(h.dispatchInboundToAiReply).not.toHaveBeenCalled()
+  })
+
+  it('dispatches menu trigger when no client flow consumed it', async () => {
+    h.isMenuTrigger.mockReturnValue(true)
+    await runWebhook({ ...TEXT_MESSAGE, text: { body: 'MENU' } })
+
+    expect(h.handleMenuOrGreeting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: 'acc-1',
+        conversationId: 'conv-1',
+        isGreeting: false,
+      }),
+    )
+    expect(h.handleFallbackMessage).not.toHaveBeenCalled()
+    expect(triggersFired()).not.toContain('keyword_match')
+    expect(triggersFired()).not.toContain('new_message_received')
+    expect(h.dispatchInboundToAiReply).not.toHaveBeenCalled()
+  })
+
+  it('dispatches greeting trigger when no client flow consumed it', async () => {
+    h.isGreeting.mockReturnValue(true)
+    await runWebhook({ ...TEXT_MESSAGE, text: { body: 'hi' } })
+
+    expect(h.handleMenuOrGreeting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: 'acc-1',
+        conversationId: 'conv-1',
+        isGreeting: true,
+      }),
+    )
+    expect(h.handleFallbackMessage).not.toHaveBeenCalled()
+    expect(triggersFired()).not.toContain('keyword_match')
+    expect(triggersFired()).not.toContain('new_message_received')
+    expect(h.dispatchInboundToAiReply).not.toHaveBeenCalled()
+  })
+
+  it('sends fallback message for unrecognized inbound text', async () => {
+    h.handleFallbackMessage.mockResolvedValue(true)
+    await runWebhook({ ...TEXT_MESSAGE, text: { body: 'something completely unrecognized' } })
+
+    expect(h.handleFallbackMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: 'acc-1',
+        conversationId: 'conv-1',
+      }),
+    )
+  })
+})
+

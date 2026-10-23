@@ -211,31 +211,36 @@ Application A (or scheduled reminder scripts) sends messages through WACRM using
 
 ---
 
-## 8. Workflow HTTP Request Step (`api_request`)
+## 8. Workflow Architecture & Behavior
 
-The visual workflow engine supports dynamic HTTP requests to FastAPI.
+The application implements a clean, simplified workflow architecture supporting exactly two workflow types with strict precedence:
 
-### Example Workflow: Automatic Policy & Payment Link Lookup
-A ready-to-import definition is provided at `docs/insurance-policy-workflow.json`.
+### A. Dedicated API-Integrated Workflow: "Renewals on My Number"
+- **Trigger**: `Renewals on My Number` (case-insensitive, trims edge punctuation and whitespace).
+- **Security**: Calls Application A (FastAPI) via secure server-side authenticated HTTPS using `FASTAPI_SERVICE_TOKEN` (`X-Service-Token` and `Authorization: Bearer`).
+- **Endpoint**: `GET /api/v1/integrations/renewals-by-phone?phone={verified_phone}`
+- **Formatting**:
+  - Numbered list of registered vehicles and models.
+  - Payment status: `✅ Payment completed`, `⏳ Payment partial`, or `⏳ Payment pending`.
+  - Balance due formatted in Indian Rupees (₹) when pending/partial.
+  - Valid customer-facing payment links only.
+  - Valid policy document URLs with enforced 5-minute expiry warning appended when documents exist.
+- **Error Handling**: Graceful fallback without exposing internal URLs or server errors.
 
-1. **Trigger**: Keyword `POLICY` or `RENEW`.
-2. **Step 1 (`api_request`)**:
-   - Method: `GET`
-   - URL: `{{vars.FASTAPI_BASE_URL}}/api/v1/integrations/policy?phone={{contact.phone}}`
-   - Response Mapping:
-     - `policy_number` ➔ `policy_number`
-     - `vehicle_number` ➔ `vehicle_number`
-     - `due_date` ➔ `due_date`
-     - `balance_due` ➔ `balance_due`
-     - `payment_link` ➔ `payment_link`
-     - `is_paid` ➔ `is_paid`
-   - Branches:
-     - Success ➔ `Step 2`
-     - Failure ➔ Fallback Message
-3. **Step 2 (`condition`)**: Checks `is_paid == true`.
-   - If true ➔ "Policy already active and paid."
-   - If false ➔ `Step 3`
-4. **Step 3 (`send_buttons`)**: Sends WhatsApp reminder with interpolated variables and payment link, with buttons ("I have paid", "Talk to Agent").
+### B. Client-Configurable Trigger-and-Reply Workflows
+- **Location**: Manageable directly in `/flows`.
+- **Configuration**: Client specifies trigger keywords and the desired reply message.
+- **Execution**: Stored as clean workflow rows (`flows` table) and executed automatically via the flow engine.
+- **Enable/Disable**: Toggled with active/disabled status.
+
+### C. Inbound Message Precedence & Fallback Hierarchy
+When an inbound message arrives, it is processed through strict precedence:
+1. **`Renewals on My Number` Trigger**: Executes the dedicated FastAPI vehicle lookup.
+2. **Active Client Workflows**: Matches enabled trigger keywords and sends the configured reply.
+3. **Menu Request (`MENU`, `OPTIONS`, `HELP`)**: Responds with the active services menu (including `Renewals on My Number` and all active client workflows).
+4. **Greeting (`HI`, `HELLO`, `HEY`, `HLO`, etc.)**: Responds with a polite welcome message and the active services menu.
+5. **Disabled Workflows Exclusion**: Workflows not in `active` status are strictly excluded from execution and the menu.
+6. **Unrecognized Message Fallback**: Inbound messages that do not match any workflow or trigger receive a helpful guidance message directing them to `MENU` or `Renewals on My Number`.
 
 ---
 

@@ -21,7 +21,14 @@ import {
 import { readCappedBody } from '@/lib/whatsapp/webhook-body'
 import { resumeAwaitingReply, runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
-import { isRenewalsTrigger, handleRenewalsTrigger } from '@/lib/integrations/renewals-service'
+import {
+  isRenewalsTrigger,
+  handleRenewalsTrigger,
+  isGreeting,
+  isMenuTrigger,
+  handleMenuOrGreeting,
+  handleFallbackMessage,
+} from '@/lib/integrations/renewals-service'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import {
@@ -875,6 +882,36 @@ async function processMessage(
     flowConsumed = flowResult.consumed
   }
 
+  // ============================================================
+  // Menu Request ("MENU", "OPTIONS", "HELP")
+  // ============================================================
+  if (!flowConsumed && !interactiveReplyId && isMenuTrigger(inboundText)) {
+    const handled = await handleMenuOrGreeting({
+      db: supabaseAdmin(),
+      accountId,
+      conversationId: conversation.id,
+      isGreeting: false,
+    })
+    if (handled) {
+      flowConsumed = true
+    }
+  }
+
+  // ============================================================
+  // Greeting Message ("HI", "HELLO", "HEY", "HLO", etc.)
+  // ============================================================
+  if (!flowConsumed && !interactiveReplyId && isGreeting(inboundText)) {
+    const handled = await handleMenuOrGreeting({
+      db: supabaseAdmin(),
+      accountId,
+      conversationId: conversation.id,
+      isGreeting: true,
+    })
+    if (handled) {
+      flowConsumed = true
+    }
+  }
+
   // An automation parked at a "wait for reply" Send Buttons / Send List
   // step takes this message as its reply — a tap or typed text — and
   // continues from the step after the send. Like a Flow consuming the
@@ -894,7 +931,7 @@ async function processMessage(
           interactive_reply_id: interactiveReplyId ?? undefined,
         },
       })
-  const contentConsumed = flowConsumed || automationConsumed
+  let contentConsumed = flowConsumed || automationConsumed
 
   const automationTriggers: (
     | 'new_contact_created'
@@ -946,9 +983,22 @@ async function processMessage(
     }).catch((err) => console.error('[automations] dispatch failed:', err))
   }
 
+  // Unrecognized message fallback: if plain-text inbound was not consumed
+  // by any flow, menu, greeting, or waiting automation, send the helpful guidance reply.
+  if (!contentConsumed && !interactiveReplyId && inboundText.trim()) {
+    const fallbackHandled = await handleFallbackMessage({
+      db: supabaseAdmin(),
+      accountId,
+      conversationId: conversation.id,
+    })
+    if (fallbackHandled) {
+      contentConsumed = true
+    }
+  }
+
   // AI auto-reply. Runs only for plain-text inbound the deterministic
-  // flow runner did NOT consume (flows win over the LLM), and only when
-  // the account has enabled it. Awaited inside `after()` (same reason as
+  // flow runner and fallback did NOT consume (flows and insurance menus win over the LLM),
+  // and only when the account has enabled it. Awaited inside `after()` (same reason as
   // the webhook dispatch below); `dispatchInboundToAiReply` owns its
   // eligibility gates + try/catch and never throws.
   if (!contentConsumed && !interactiveReplyId && inboundText.trim()) {

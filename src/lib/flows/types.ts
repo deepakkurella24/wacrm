@@ -173,28 +173,6 @@ export interface SetTagNodeConfig {
   next_node_key: string;
 }
 
-export interface ApiRequestNodeConfig {
-  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-  /** Target URL supporting {{contact.X}} and {{vars.X}} interpolation. */
-  url: string;
-  /** Optional custom headers (e.g. Authorization: Bearer ...). Values interpolate {{vars.X}} and {{contact.X}}. */
-  headers?: Record<string, string>;
-  /** Optional request body for POST/PUT/PATCH. Values interpolate {{vars.X}} and {{contact.X}}. */
-  body?: string;
-  /**
-   * JSON dot-path response mapping: extracts JSON fields from response into flow vars.
-   * Key: destination variable name (e.g. 'policy_number').
-   * Value: JSON dot-path in response (e.g. 'policy_number' or 'data.policy.number').
-   */
-  response_mapping?: Record<string, string>;
-  /** Request timeout in ms (default: 10000ms, max: 30000ms). */
-  timeout_ms?: number;
-  /** Node to advance to on HTTP 2xx and successful response parsing. */
-  success_next: string;
-  /** Node to advance to on non-2xx status, timeout, network failure, or SSRF rejection. */
-  failure_next: string;
-}
-
 // Terminal nodes carry no config — they just stop the run.
 export type EndNodeConfig = Record<string, never>;
 
@@ -210,7 +188,6 @@ export type FlowNodeConfig =
   | { node_type: "collect_input"; config: CollectInputNodeConfig }
   | { node_type: "condition"; config: ConditionNodeConfig }
   | { node_type: "set_tag"; config: SetTagNodeConfig }
-  | { node_type: "api_request"; config: ApiRequestNodeConfig }
   | { node_type: "handoff"; config: HandoffNodeConfig }
   | { node_type: "end"; config: EndNodeConfig };
 
@@ -395,7 +372,6 @@ export const AUTO_ADVANCING_NODE_TYPES: ReadonlySet<string> = new Set([
   "send_media",
   "condition",
   "set_tag",
-  "api_request",
 ]);
 
 export function assertNever(x: never): never {

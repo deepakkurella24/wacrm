@@ -1,9 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   isRenewalsTrigger,
+  isGreeting,
+  isMenuTrigger,
   formatRenewalsReply,
+  formatMenuMessage,
+  formatFallbackMessage,
   fetchCustomerRenewals,
   handleRenewalsTrigger,
+  handleMenuOrGreeting,
+  handleFallbackMessage,
+  getActiveClientWorkflows,
   type RenewalsApiResponse,
 } from './renewals-service';
 import * as sendMessageModule from '@/lib/whatsapp/send-message';
@@ -237,4 +244,223 @@ describe('Renewals on My Number Trigger', () => {
       );
     });
   });
+
+  describe('isGreeting matcher', () => {
+    it('matches common greeting words case-insensitively', () => {
+      expect(isGreeting('hi')).toBe(true);
+      expect(isGreeting('HI')).toBe(true);
+      expect(isGreeting('hello')).toBe(true);
+      expect(isGreeting('Hello')).toBe(true);
+      expect(isGreeting('hlo')).toBe(true);
+      expect(isGreeting('hey')).toBe(true);
+      expect(isGreeting('namaste')).toBe(true);
+      expect(isGreeting('good morning')).toBe(true);
+      expect(isGreeting('good afternoon')).toBe(true);
+      expect(isGreeting('good evening')).toBe(true);
+    });
+
+    it('matches with leading/trailing whitespace and punctuation', () => {
+      expect(isGreeting('  hello! ')).toBe(true);
+      expect(isGreeting('Hi.')).toBe(true);
+      expect(isGreeting(' hey! ')).toBe(true);
+      expect(isGreeting('\ngood morning\t')).toBe(true);
+    });
+
+    it('rejects non-greeting messages', () => {
+      expect(isGreeting('hello, I want to cancel my policy')).toBe(false);
+      expect(isGreeting('hi there my friend')).toBe(false);
+      expect(isGreeting('renewals')).toBe(false);
+      expect(isGreeting('')).toBe(false);
+      expect(isGreeting(null)).toBe(false);
+      expect(isGreeting(undefined)).toBe(false);
+    });
+  });
+
+  describe('isMenuTrigger matcher', () => {
+    it('matches menu keywords case-insensitively', () => {
+      expect(isMenuTrigger('menu')).toBe(true);
+      expect(isMenuTrigger('MENU')).toBe(true);
+      expect(isMenuTrigger('options')).toBe(true);
+      expect(isMenuTrigger('OPTIONS')).toBe(true);
+      expect(isMenuTrigger('help')).toBe(true);
+      expect(isMenuTrigger('HELP')).toBe(true);
+    });
+
+    it('matches with whitespace and punctuation', () => {
+      expect(isMenuTrigger('  menu  ')).toBe(true);
+      expect(isMenuTrigger('menu!')).toBe(true);
+      expect(isMenuTrigger('options.')).toBe(true);
+    });
+
+    it('rejects unrelated text containing menu words', () => {
+      expect(isMenuTrigger('show me the menu please')).toBe(false);
+      expect(isMenuTrigger('need help with payment')).toBe(false);
+      expect(isMenuTrigger('')).toBe(false);
+      expect(isMenuTrigger(null)).toBe(false);
+      expect(isMenuTrigger(undefined)).toBe(false);
+    });
+  });
+
+  describe('formatMenuMessage', () => {
+    const mockWorkflows = [
+      { id: 'wf-1', name: 'File a Claim', keywords: ['claim'] },
+      { id: 'wf-2', name: 'Branch Locations', keywords: ['branch', 'office'] },
+    ];
+
+    it('formats menu in standard mode', () => {
+      const menu = formatMenuMessage(mockWorkflows, false);
+      expect(menu).not.toContain('Hello! Welcome');
+      expect(menu).toContain('Available Services:');
+      expect(menu).toContain('1. Renewals on My Number');
+      expect(menu).toContain('2. File a Claim');
+      expect(menu).toContain('3. Branch Locations');
+      expect(menu).toContain('Reply with any option above, or send MENU at any time');
+    });
+
+    it('formats menu in greeting mode with welcome banner', () => {
+      const menu = formatMenuMessage(mockWorkflows, true);
+      expect(menu).toContain('Hello! Welcome to our insurance service');
+      expect(menu).toContain('Available Services:');
+      expect(menu).toContain('1. Renewals on My Number');
+      expect(menu).toContain('2. File a Claim');
+      expect(menu).toContain('3. Branch Locations');
+    });
+
+    it('deduplicates Renewals on My Number if client flow shares the same name', () => {
+      const wfsWithDuplicate = [
+        { id: 'wf-0', name: 'Renewals on My Number', keywords: ['renewals'] },
+        { id: 'wf-1', name: 'File a Claim', keywords: ['claim'] },
+      ];
+      const menu = formatMenuMessage(wfsWithDuplicate, false);
+      const count = (menu.match(/Renewals on My Number/g) || []).length;
+      expect(count).toBe(1);
+      expect(menu).toContain('1. Renewals on My Number');
+      expect(menu).toContain('2. File a Claim');
+    });
+  });
+
+  describe('formatFallbackMessage', () => {
+    it('returns helpful instructions referencing MENU and Renewals on My Number', () => {
+      const fallback = formatFallbackMessage();
+      expect(fallback).toContain("couldn't recognize your request");
+      expect(fallback).toContain('*MENU*');
+      expect(fallback).toContain('*Renewals on My Number*');
+    });
+  });
+
+  describe('getActiveClientWorkflows', () => {
+    it('queries only active flows from database', async () => {
+      const mockQueryChain: any = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockImplementation((col: string, val: string) => {
+          if (col === 'account_id') {
+            return {
+              eq: vi.fn((statusCol: string, statusVal: string) => {
+                expect(statusCol).toBe('status');
+                expect(statusVal).toBe('active');
+                return {
+                  order: vi.fn().mockResolvedValue({
+                    data: [
+                      {
+                        id: 'flow-1',
+                        name: 'Policy FAQs',
+                        trigger_type: 'keyword',
+                        trigger_config: { keywords: ['faq'] },
+                        status: 'active',
+                      },
+                    ],
+                    error: null,
+                  }),
+                };
+              }),
+            };
+          }
+          return mockQueryChain;
+        }),
+      };
+      const db: any = { from: () => mockQueryChain };
+
+      const workflows = await getActiveClientWorkflows(db, 'acc-1');
+      expect(workflows).toHaveLength(1);
+      expect(workflows[0].name).toBe('Policy FAQs');
+      expect(workflows[0].keywords).toEqual(['faq']);
+    });
+  });
+
+  describe('handleMenuOrGreeting & handleFallbackMessage actions', () => {
+    it('handleMenuOrGreeting queries active flows and sends formatted menu', async () => {
+      const executeSendSpy = vi
+        .spyOn(sendMessageModule, 'sendMessageToConversation')
+        .mockResolvedValueOnce({ messageId: 'm1', whatsappMessageId: 'wamid1' });
+
+      const mockQueryChain: any = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockImplementation(() => ({
+          eq: vi.fn().mockReturnValue({
+            order: vi.fn().mockResolvedValue({
+              data: [
+                {
+                  id: 'wf-1',
+                  name: 'Live Agent',
+                  trigger_type: 'keyword',
+                  trigger_config: { keywords: ['agent'] },
+                  status: 'active',
+                },
+              ],
+              error: null,
+            }),
+          }),
+        })),
+      };
+      const db: any = { from: () => mockQueryChain };
+
+      const handled = await handleMenuOrGreeting({
+        db,
+        accountId: 'acc-1',
+        conversationId: 'conv-1',
+        isGreeting: true,
+      });
+
+      expect(handled).toBe(true);
+      expect(executeSendSpy).toHaveBeenCalledWith(
+        db,
+        'acc-1',
+        expect.objectContaining({
+          conversationId: 'conv-1',
+          contentText: expect.stringContaining('Hello! Welcome to our insurance service'),
+        }),
+      );
+      expect(executeSendSpy).toHaveBeenCalledWith(
+        db,
+        'acc-1',
+        expect.objectContaining({
+          contentText: expect.stringContaining('2. Live Agent'),
+        }),
+      );
+    });
+
+    it('handleFallbackMessage sends standard unrecognized message fallback', async () => {
+      const executeSendSpy = vi
+        .spyOn(sendMessageModule, 'sendMessageToConversation')
+        .mockResolvedValueOnce({ messageId: 'm2', whatsappMessageId: 'wamid2' });
+
+      const db: any = {};
+      const handled = await handleFallbackMessage({
+        db,
+        accountId: 'acc-1',
+        conversationId: 'conv-1',
+      });
+
+      expect(handled).toBe(true);
+      expect(executeSendSpy).toHaveBeenCalledWith(
+        db,
+        'acc-1',
+        expect.objectContaining({
+          conversationId: 'conv-1',
+          contentText: expect.stringContaining("couldn't recognize your request"),
+        }),
+      );
+    });
+  });
 });
+

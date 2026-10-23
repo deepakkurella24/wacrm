@@ -20,6 +20,24 @@ export interface RenewalsApiResponse {
   vehicles: VehicleRenewalItem[];
 }
 
+export interface ActiveWorkflowItem {
+  id: string;
+  name: string;
+  keywords: string[];
+}
+
+/**
+ * Clean incoming text: trim, lowercase, collapse whitespace, strip edge punctuation.
+ */
+export function cleanMessageText(rawText: string | null | undefined): string {
+  if (!rawText) return '';
+  return rawText
+    .trim()
+    .toLowerCase()
+    .replace(/^[\s.,!?:;'"-]+|[\s.,!?:;'"-]+$/g, '')
+    .replace(/\s+/g, ' ');
+}
+
 /**
  * Match the hardcoded trigger "Renewals on My Number".
  *
@@ -30,14 +48,112 @@ export interface RenewalsApiResponse {
  * - Strict exact match: does not trigger on unrelated sentences containing the words
  */
 export function isRenewalsTrigger(rawText: string | null | undefined): boolean {
-  if (!rawText) return false;
-  const cleaned = rawText
-    .trim()
-    .toLowerCase()
-    .replace(/^[\s.,!?:;'"-]+|[\s.,!?:;'"-]+$/g, '')
-    .replace(/\s+/g, ' ');
+  return cleanMessageText(rawText) === 'renewals on my number';
+}
 
-  return cleaned === 'renewals on my number';
+/**
+ * Common greetings: hi, hello, hlo, hey, namaste, good morning, etc.
+ */
+const GREETINGS = new Set([
+  'hi',
+  'hello',
+  'hlo',
+  'hey',
+  'namaste',
+  'good morning',
+  'good afternoon',
+  'good evening',
+]);
+
+export function isGreeting(rawText: string | null | undefined): boolean {
+  return GREETINGS.has(cleanMessageText(rawText));
+}
+
+/**
+ * Menu trigger: MENU, options, help.
+ */
+const MENU_COMMANDS = new Set(['menu', 'options', 'help']);
+
+export function isMenuTrigger(rawText: string | null | undefined): boolean {
+  return MENU_COMMANDS.has(cleanMessageText(rawText));
+}
+
+/**
+ * Retrieve enabled client-configured workflows from the database.
+ * Disabled (draft / archived) workflows are excluded.
+ */
+export async function getActiveClientWorkflows(
+  db: SupabaseClient,
+  accountId: string,
+): Promise<ActiveWorkflowItem[]> {
+  const { data: flows, error } = await db
+    .from('flows')
+    .select('id, name, trigger_type, trigger_config, status')
+    .eq('account_id', accountId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: true });
+
+  if (error || !flows) return [];
+
+  return flows.map((f: any) => {
+    const keywords: string[] =
+      f.trigger_type === 'keyword' && Array.isArray(f.trigger_config?.keywords)
+        ? f.trigger_config.keywords
+        : [];
+    return {
+      id: f.id,
+      name: f.name || 'Custom Workflow',
+      keywords,
+    };
+  });
+}
+
+/**
+ * Generate the available-actions menu.
+ * - Always includes Option 1: "Renewals on My Number".
+ * - Dynamically includes any active client-configured workflows.
+ * - Excludes disabled workflows.
+ */
+export function formatMenuMessage(
+  activeWorkflows: ActiveWorkflowItem[] = [],
+  isGreetingMode = false,
+): string {
+  const lines: string[] = [];
+
+  if (isGreetingMode) {
+    lines.push('Hello! Welcome to our insurance service. How can we help you today?');
+    lines.push('');
+  }
+
+  lines.push('Available Services:');
+  lines.push('1. Renewals on My Number');
+
+  let index = 2;
+  activeWorkflows.forEach((wf) => {
+    if (wf.name.toLowerCase() === 'renewals on my number') return;
+    const label = wf.name || (wf.keywords.length > 0 ? wf.keywords[0] : `Service ${index}`);
+    lines.push(`${index}. ${label}`);
+    index += 1;
+  });
+
+  lines.push('');
+  lines.push('Reply with any option above, or send MENU at any time to view this list.');
+
+  return lines.join('\n');
+}
+
+/**
+ * Generate a helpful fallback message for unrecognized input.
+ */
+export function formatFallbackMessage(): string {
+  return [
+    "Thank you for your message! We couldn't recognize your request.",
+    '',
+    '• Reply with *MENU* to see available options.',
+    '• Reply with *Renewals on My Number* to check your vehicle renewal status.',
+    '',
+    'Our agent has also been notified and will assist you shortly.',
+  ].join('\n');
 }
 
 /**
@@ -178,6 +294,55 @@ export async function handleRenewalsTrigger(params: HandleRenewalsParams): Promi
     return true;
   } catch (err) {
     console.error('[RenewalsTrigger] Failed to send renewals reply message:', err);
+    return false;
+  }
+}
+
+export interface WorkflowActionParams {
+  db: SupabaseClient;
+  accountId: string;
+  conversationId: string;
+}
+
+/**
+ * Send the menu or greeting response to the customer.
+ */
+export async function handleMenuOrGreeting(
+  params: WorkflowActionParams & { isGreeting: boolean },
+): Promise<boolean> {
+  const { db, accountId, conversationId, isGreeting: isGreetingMode } = params;
+  try {
+    const activeWorkflows = await getActiveClientWorkflows(db, accountId);
+    const text = formatMenuMessage(activeWorkflows, isGreetingMode);
+    await sendMessageToConversation(db, accountId, {
+      conversationId,
+      messageType: 'text',
+      contentText: text,
+    });
+    return true;
+  } catch (err) {
+    console.error('[WorkflowDispatcher] Failed to send menu/greeting:', err);
+    return false;
+  }
+}
+
+/**
+ * Send a helpful fallback response when message is unrecognized.
+ */
+export async function handleFallbackMessage(
+  params: WorkflowActionParams,
+): Promise<boolean> {
+  const { db, accountId, conversationId } = params;
+  try {
+    const text = formatFallbackMessage();
+    await sendMessageToConversation(db, accountId, {
+      conversationId,
+      messageType: 'text',
+      contentText: text,
+    });
+    return true;
+  } catch (err) {
+    console.error('[WorkflowDispatcher] Failed to send fallback message:', err);
     return false;
   }
 }

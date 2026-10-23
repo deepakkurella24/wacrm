@@ -85,30 +85,6 @@ export function deriveCanvasEdges(nodes: BuilderNode[]): CanvasEdge[] {
         break;
       }
 
-      case "api_request": {
-        const successNext = (cfg as { success_next?: string }).success_next;
-        const failureNext = (cfg as { failure_next?: string }).failure_next;
-        if (successNext && knownKeys.has(successNext)) {
-          edges.push({
-            id: `${node.node_key}--success--${successNext}`,
-            source: node.node_key,
-            target: successNext,
-            sourceHandle: "success",
-            label: "success",
-          });
-        }
-        if (failureNext && knownKeys.has(failureNext)) {
-          edges.push({
-            id: `${node.node_key}--failure--${failureNext}`,
-            source: node.node_key,
-            target: failureNext,
-            sourceHandle: "failure",
-            label: "failure",
-          });
-        }
-        break;
-      }
-
       case "send_buttons": {
         const buttons = Array.isArray(
           (cfg as { buttons?: unknown }).buttons,
@@ -211,12 +187,6 @@ export function outgoingSlots(node: BuilderNode): OutgoingSlot[] {
         { id: "false", label: "false" },
       ];
 
-    case "api_request":
-      return [
-        { id: "success", label: "success" },
-        { id: "failure", label: "failure" },
-      ];
-
     case "send_buttons": {
       const buttons = Array.isArray((cfg as { buttons?: unknown }).buttons)
         ? ((cfg as { buttons: Array<Record<string, unknown>> }).buttons)
@@ -289,11 +259,6 @@ export function applyEdgeConnection(
     case "condition":
       if (sourceHandle === "true") return { true_next: targetKey };
       if (sourceHandle === "false") return { false_next: targetKey };
-      return null;
-
-    case "api_request":
-      if (sourceHandle === "success") return { success_next: targetKey };
-      if (sourceHandle === "failure") return { failure_next: targetKey };
       return null;
 
     case "send_buttons": {
@@ -396,18 +361,6 @@ function patchedConfigWithoutKey(
         ...cfg,
         ...(trueMatch ? { true_next: "" } : {}),
         ...(falseMatch ? { false_next: "" } : {}),
-      };
-    }
-
-    case "api_request": {
-      const c = cfg as { success_next?: string; failure_next?: string };
-      const successMatch = c.success_next === deletedKey;
-      const failureMatch = c.failure_next === deletedKey;
-      if (!successMatch && !failureMatch) return null;
-      return {
-        ...cfg,
-        ...(successMatch ? { success_next: "" } : {}),
-        ...(failureMatch ? { failure_next: "" } : {}),
       };
     }
 

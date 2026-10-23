@@ -19,7 +19,6 @@
 import {
   Flag,
   GitFork,
-  Globe,
   Inbox,
   ListChecks,
   ListPlus,
@@ -50,7 +49,6 @@ export type NodeType =
   | 'collect_input'
   | 'condition'
   | 'set_tag'
-  | 'api_request'
   | 'handoff'
   | 'end';
 
@@ -147,12 +145,6 @@ export const NODE_META: Record<
     color: 'text-pink-400',
     category: 'logic',
   },
-  api_request: {
-    slugSeed: 'API request',
-    icon: Globe,
-    color: 'text-amber-500',
-    category: 'logic',
-  },
   handoff: {
     slugSeed: 'Handoff to agent',
     icon: UserPlus,
@@ -203,7 +195,6 @@ const NODE_HUE: Record<NodeType, { l: number; c: number; h: number }> = {
   collect_input: { l: 0.65, c: 0.1, h: 185 }, // teal — capture
   condition: { l: 0.72, c: 0.15, h: 65 }, // amber — a fork in the road
   set_tag: { l: 0.65, c: 0.15, h: 350 }, // pink
-  api_request: { l: 0.68, c: 0.16, h: 45 }, // amber
   handoff: { l: 0.65, c: 0.17, h: 16 }, // rose — hands off
   end: { l: 0.55, c: 0.01, h: 260 }, // neutral grey — terminal
 };
@@ -422,11 +413,6 @@ export function summarizeNode(
     case 'handoff': {
       const note = typeof cfg.note === 'string' ? cfg.note : '';
       return note.length > 0 ? truncate(note) : null;
-    }
-    case 'api_request': {
-      const method = typeof cfg.method === 'string' ? cfg.method.toUpperCase() : 'GET';
-      const url = typeof cfg.url === 'string' ? cfg.url : '';
-      return url ? `${method} ${truncate(url, 50)}` : 'API Request';
     }
   }
 }
