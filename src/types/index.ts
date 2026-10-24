@@ -246,6 +246,12 @@ export interface Message {
    * Null on every row written before migration 039.
    */
   media_type?: string | null;
+  /** Backblaze B2 object key (e.g. whatsapp-media/<reference_id>/<file>) */
+  media_key?: string | null;
+  media_mime_type?: string | null;
+  media_size?: number | null;
+  media_filename?: string | null;
+  media_status?: 'pending' | 'uploaded' | 'failed' | null;
   template_name?: string;
   message_id?: string;
   status: MessageStatus;

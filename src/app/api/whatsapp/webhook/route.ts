@@ -3,6 +3,7 @@ import { getDb } from '@/lib/db'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { mirrorInboundMedia } from '@/lib/whatsapp/mirror-inbound-media'
+import { mirrorInboundMediaToB2 } from '@/lib/media/b2-media-service'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import {
   hasUsableIdentity,
@@ -636,12 +637,20 @@ async function processMessage(
   }
 
   // Parse message content based on type
-  const { contentText, mediaUrl, mediaType, interactiveReplyId } =
-    await parseMessageContent(
-      message,
-      accessToken,
-      mirrorMedia ? { accountId } : null
-    )
+  const {
+    contentText,
+    mediaUrl,
+    mediaType,
+    mediaKey,
+    mediaSize,
+    mediaFilename,
+    mediaStatus,
+    interactiveReplyId,
+  } = await parseMessageContent(
+    message,
+    accessToken,
+    mirrorMedia ? { accountId } : null
+  )
 
   // Resolve swipe-reply context if present. A missing parent is fine —
   // we just store NULL and the UI renders the message without a quote.
@@ -701,11 +710,12 @@ async function processMessage(
         content_type: contentType,
         content_text: contentText,
         media_url: mediaUrl,
-        // Meta's MIME type for the attachment (migration 039). Was
-        // discarded before, which forced the download path to guess an
-        // extension from the fetched blob — impossible to do until the
-        // bytes had already been fetched successfully.
         media_type: mediaType,
+        media_key: mediaKey,
+        media_mime_type: mediaType,
+        media_size: mediaSize,
+        media_filename: mediaFilename,
+        media_status: mediaStatus,
         message_id: message.id,
         status: 'delivered',
         created_at: receivedAt,
@@ -902,6 +912,10 @@ async function parseMessageContent(
   contentText: string | null
   mediaUrl: string | null
   mediaType: string | null
+  mediaKey: string | null
+  mediaSize: number | null
+  mediaFilename: string | null
+  mediaStatus: 'uploaded' | 'failed' | null
   /**
    * For interactive button / list replies: the stable id of the tapped
    * option (whatever we put on the button when sending). Used by the
@@ -911,52 +925,83 @@ async function parseMessageContent(
    */
   interactiveReplyId: string | null
 }> {
-  // getMediaUrl signature is (mediaId, accessToken) — earlier code had
-  // the args swapped, so every verification hit an invalid Meta URL and
-  // fell through to the catch block, leaving mediaUrl as null. That's
-  // why images showed up as empty bubbles in the inbox.
-  //
-  // Beyond verifying, this is where inbound media gets COPIED into the
-  // `chat-media` bucket (issue #466). Meta deletes media ~30 days after
-  // receipt, so the `/api/whatsapp/media/<id>` proxy URL we used to
-  // store is a pointer with an expiry date on it — every inbound
-  // attachment silently became "Photo unavailable" a month later.
-  // Mirroring stores a durable public URL instead.
-  //
-  // The mirror is strictly best-effort. `mirrorInboundMedia` swallows
-  // its own failures and returns null, and we fall back to the proxy
-  // URL — a webhook that throws would have Meta retry the delivery and
-  // re-run everything downstream, which is a far worse outcome than an
-  // attachment that expires.
-  const verifyAndBuildUrl = async (
+  const verifyAndBuildMedia = async (
     mediaId: string,
-    fileName?: string | null
-  ): Promise<string | null> => {
+    fileName?: string | null,
+    declaredMime?: string | null
+  ): Promise<{
+    mediaUrl: string | null
+    mediaType: string | null
+    mediaKey: string | null
+    mediaSize: number | null
+    mediaFilename: string | null
+    mediaStatus: 'uploaded' | 'failed' | null
+  }> => {
     try {
       const info = await getMediaUrl({ mediaId, accessToken })
+      const effectiveMime = info.mimeType || declaredMime || null
+
+      let mediaKey: string | null = null
+      let mediaSize: number | null = info.fileSize ?? null
+      let mediaFilename: string | null = fileName || null
+      let mediaStatus: 'uploaded' | 'failed' | null = null
+      let mediaUrl = `/api/whatsapp/media/${mediaId}`
 
       if (mirror) {
-        const mirrored = await mirrorInboundMedia({
-          storage: supabaseAdmin().storage,
-          accountId: mirror.accountId,
-          mediaId,
-          downloadUrl: info.url,
-          accessToken,
-          mimeType: info.mimeType,
-          fileSize: info.fileSize,
-          fileName,
-          messageTimestamp: message.timestamp,
-        })
-        if (mirrored) return mirrored
+        if (process.env.FASTAPI_BASE_URL) {
+          const b2Result = await mirrorInboundMediaToB2({
+            mediaId,
+            downloadUrl: info.url,
+            accessToken,
+            mimeType: effectiveMime,
+            fileSize: info.fileSize,
+            fileName,
+          })
+          if (b2Result) {
+            mediaKey = b2Result.objectKey
+            mediaSize = b2Result.fileSize
+            mediaFilename = b2Result.filename
+            mediaStatus = 'uploaded'
+          } else {
+            mediaStatus = 'failed'
+          }
+        } else {
+          const mirrored = await mirrorInboundMedia({
+            storage: supabaseAdmin().storage,
+            accountId: mirror.accountId,
+            mediaId,
+            downloadUrl: info.url,
+            accessToken,
+            mimeType: effectiveMime,
+            fileSize: info.fileSize,
+            fileName,
+            messageTimestamp: message.timestamp,
+          })
+          if (mirrored) mediaUrl = mirrored
+        }
       }
 
-      return `/api/whatsapp/media/${mediaId}`
+      return {
+        mediaUrl,
+        mediaType: effectiveMime,
+        mediaKey,
+        mediaSize,
+        mediaFilename,
+        mediaStatus,
+      }
     } catch (error) {
       console.error(
         `Failed to verify media ${mediaId} with Meta:`,
         error instanceof Error ? error.message : error
       )
-      return null
+      return {
+        mediaUrl: null,
+        mediaType: declaredMime || null,
+        mediaKey: null,
+        mediaSize: null,
+        mediaFilename: fileName || null,
+        mediaStatus: null,
+      }
     }
   }
 
@@ -966,6 +1011,10 @@ async function parseMessageContent(
     contentText: null,
     mediaUrl: null,
     mediaType: null,
+    mediaKey: null,
+    mediaSize: null,
+    mediaFilename: null,
+    mediaStatus: null,
     interactiveReplyId: null,
   }
 
@@ -975,50 +1024,68 @@ async function parseMessageContent(
 
     case 'image':
       if (message.image?.id) {
+        const media = await verifyAndBuildMedia(message.image.id, null, message.image.mime_type)
         return {
           ...empty,
           contentText: message.image.caption || null,
-          mediaUrl: await verifyAndBuildUrl(message.image.id),
-          mediaType: message.image.mime_type,
+          mediaUrl: media.mediaUrl,
+          mediaType: media.mediaType,
+          mediaKey: media.mediaKey,
+          mediaSize: media.mediaSize,
+          mediaFilename: media.mediaFilename,
+          mediaStatus: media.mediaStatus,
         }
       }
       return empty
 
     case 'video':
       if (message.video?.id) {
+        const media = await verifyAndBuildMedia(message.video.id, null, message.video.mime_type)
         return {
           ...empty,
           contentText: message.video.caption || null,
-          mediaUrl: await verifyAndBuildUrl(message.video.id),
-          mediaType: message.video.mime_type,
+          mediaUrl: media.mediaUrl,
+          mediaType: media.mediaType,
+          mediaKey: media.mediaKey,
+          mediaSize: media.mediaSize,
+          mediaFilename: media.mediaFilename,
+          mediaStatus: media.mediaStatus,
         }
       }
       return empty
 
     case 'document':
       if (message.document?.id) {
+        const media = await verifyAndBuildMedia(
+          message.document.id,
+          message.document.filename,
+          message.document.mime_type
+        )
         return {
           ...empty,
           contentText:
             message.document.caption || message.document.filename || null,
-          // The sender's own filename becomes the mirrored object's
-          // name, so saving the attachment yields `invoice.pdf` even
-          // when a caption displaced the filename in content_text.
-          mediaUrl: await verifyAndBuildUrl(
-            message.document.id,
-            message.document.filename
-          ),
-          mediaType: message.document.mime_type,
+          mediaUrl: media.mediaUrl,
+          mediaType: media.mediaType,
+          mediaKey: media.mediaKey,
+          mediaSize: media.mediaSize,
+          mediaFilename: media.mediaFilename,
+          mediaStatus: media.mediaStatus,
         }
       }
       return empty
 
     case 'audio':
       if (message.audio?.id) {
+        const media = await verifyAndBuildMedia(message.audio.id, null, message.audio.mime_type)
         return {
           ...empty,
-          mediaUrl: await verifyAndBuildUrl(message.audio.id),
-          mediaType: message.audio.mime_type,
+          mediaUrl: media.mediaUrl,
+          mediaType: media.mediaType,
+          mediaKey: media.mediaKey,
+          mediaSize: media.mediaSize,
+          mediaFilename: media.mediaFilename,
+          mediaStatus: media.mediaStatus,
         }
       }
       return empty
@@ -1028,10 +1095,15 @@ async function parseMessageContent(
       // MessageBubble renders the <img>. The caller maps the DB
       // content_type to 'image' for the CHECK constraint.
       if (message.sticker?.id) {
+        const media = await verifyAndBuildMedia(message.sticker.id, null, message.sticker.mime_type)
         return {
           ...empty,
-          mediaUrl: await verifyAndBuildUrl(message.sticker.id),
-          mediaType: message.sticker.mime_type,
+          mediaUrl: media.mediaUrl,
+          mediaType: media.mediaType,
+          mediaKey: media.mediaKey,
+          mediaSize: media.mediaSize,
+          mediaFilename: media.mediaFilename,
+          mediaStatus: media.mediaStatus,
         }
       }
       return empty

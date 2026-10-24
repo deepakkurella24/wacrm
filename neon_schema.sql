@@ -199,6 +199,11 @@ CREATE TABLE IF NOT EXISTS messages (
   content_type TEXT NOT NULL DEFAULT 'text' CHECK (content_type IN ('text', 'image', 'document', 'audio', 'video', 'location', 'template', 'interactive')),
   content_text TEXT,
   media_url TEXT,
+  media_key TEXT,                    -- Backblaze B2 object key (e.g. whatsapp-media/<ref>/<file>)
+  media_mime_type TEXT,              -- MIME type of the stored media
+  media_size BIGINT,                 -- File size in bytes
+  media_filename TEXT,               -- Original filename from sender (if available)
+  media_status TEXT DEFAULT NULL CHECK (media_status IS NULL OR media_status IN ('pending', 'uploaded', 'failed')),
   template_name TEXT,
   message_id TEXT, -- Meta WAMID
   reply_to_message_id UUID REFERENCES messages(id) ON DELETE SET NULL,

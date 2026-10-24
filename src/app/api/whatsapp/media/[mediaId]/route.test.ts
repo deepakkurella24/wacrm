@@ -6,6 +6,8 @@ const h = vi.hoisted(() => ({
   downloadContentType: 'image/jpeg',
   metaMimeType: 'image/jpeg',
   rateLimitOk: true,
+  mediaKey: null as string | null,
+  conversationAccountId: 'acc-1' as string | null,
 }))
 
 vi.mock('next/server', () => ({
@@ -15,7 +17,14 @@ vi.mock('next/server', () => ({
         status: init?.status ?? 200,
         headers: { 'Content-Type': 'application/json' },
       }),
+    redirect: (url: string, init?: any) =>
+      Response.redirect(url, typeof init === 'number' ? init : (init?.status ?? 307)),
   },
+}))
+
+vi.mock('@/lib/media/b2-media-service', () => ({
+  requestB2DownloadUrl: async (objectKey: string) =>
+    `https://b2.example.com/download/${objectKey}?expires=900`,
 }))
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -24,16 +33,45 @@ vi.mock('@/lib/supabase/server', () => ({
       getUser: async () => ({ data: { user: h.user }, error: null }),
     },
     from(table: string) {
-      const chain = {
+      const chain: any = {
         select: () => chain,
         eq: () => chain,
-        maybeSingle: async () => ({
-          data: table === 'profiles' && h.accountId ? { account_id: h.accountId } : null,
-        }),
-        single: async () => ({
-          data: table === 'whatsapp_config' ? { access_token: 'enc-token' } : null,
-          error: null,
-        }),
+        or: () => chain,
+        limit: () => chain,
+        maybeSingle: async () => {
+          if (table === 'profiles' && h.accountId) {
+            return { data: { account_id: h.accountId } }
+          }
+          if (table === 'conversations') {
+            return { data: { id: 'conv-1', account_id: h.conversationAccountId } }
+          }
+          return { data: null }
+        },
+        single: async () => {
+          if (table === 'whatsapp_config') {
+            return { data: { access_token: 'enc-token' }, error: null }
+          }
+          return { data: null, error: null }
+        },
+        then: (resolve: any) => {
+          if (table === 'messages') {
+            if (h.mediaKey) {
+              return resolve({
+                data: [
+                  {
+                    id: 'msg-1',
+                    conversation_id: 'conv-1',
+                    media_key: h.mediaKey,
+                    media_mime_type: 'image/jpeg',
+                  },
+                ],
+                error: null,
+              })
+            }
+            return resolve({ data: [], error: null })
+          }
+          return resolve({ data: [], error: null })
+        },
       }
       return chain
     },
@@ -64,10 +102,13 @@ vi.mock('@/lib/whatsapp/meta-api', () => ({
 
 import { GET } from './route'
 
-function call(mediaId = '1234567890') {
-  return GET(new Request(`http://localhost/api/whatsapp/media/${mediaId}`), {
-    params: Promise.resolve({ mediaId }),
-  })
+function call(mediaId = '1234567890', headers: Record<string, string> = {}) {
+  return GET(
+    new Request(`http://localhost/api/whatsapp/media/${mediaId}`, { headers }),
+    {
+      params: Promise.resolve({ mediaId }),
+    }
+  )
 }
 
 beforeEach(() => {
@@ -76,6 +117,9 @@ beforeEach(() => {
   h.downloadContentType = 'image/jpeg'
   h.metaMimeType = 'image/jpeg'
   h.rateLimitOk = true
+  h.mediaKey = null
+  h.conversationAccountId = 'acc-1'
+  vi.unstubAllEnvs()
 })
 
 describe('GET /api/whatsapp/media/[mediaId]', () => {
@@ -128,6 +172,38 @@ describe('GET /api/whatsapp/media/[mediaId]', () => {
   it('rejects a caller with no linked account', async () => {
     h.accountId = null
     const res = await call()
+    expect(res.status).toBe(403)
+  })
+
+  it('redirects to signed Backblaze B2 download URL when media_key is present', async () => {
+    vi.stubEnv('FASTAPI_BASE_URL', 'http://127.0.0.1:8000')
+    h.mediaKey = 'whatsapp-media/12345/document.pdf'
+
+    const res = await call('12345')
+    expect(res.status).toBe(307)
+    expect(res.headers.get('location')).toBe(
+      'https://b2.example.com/download/whatsapp-media/12345/document.pdf?expires=900'
+    )
+  })
+
+  it('returns JSON with signed download_url when Accept: application/json is sent', async () => {
+    vi.stubEnv('FASTAPI_BASE_URL', 'http://127.0.0.1:8000')
+    h.mediaKey = 'whatsapp-media/12345/document.pdf'
+
+    const res = await call('12345', { Accept: 'application/json' })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as any
+    expect(body.download_url).toBe(
+      'https://b2.example.com/download/whatsapp-media/12345/document.pdf?expires=900'
+    )
+  })
+
+  it('refuses access with 403 when user belongs to a different account than the conversation', async () => {
+    vi.stubEnv('FASTAPI_BASE_URL', 'http://127.0.0.1:8000')
+    h.mediaKey = 'whatsapp-media/12345/document.pdf'
+    h.conversationAccountId = 'different-account-id'
+
+    const res = await call('12345')
     expect(res.status).toBe(403)
   })
 })

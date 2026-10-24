@@ -643,6 +643,53 @@ describe('inbound webhook: inbound media is mirrored (#466)', () => {
     expect(h.state.storageUploads).toHaveLength(0)
     expect(h.state.upsertCalls[0].row).toMatchObject({ media_type: null })
   })
+
+  it('mirrors inbound media to Backblaze B2 when FASTAPI_BASE_URL is configured', async () => {
+    vi.stubEnv('FASTAPI_BASE_URL', 'http://127.0.0.1:8000')
+    vi.stubEnv('FASTAPI_SERVICE_TOKEN', 'token-123')
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      // 1st fetch: upload-url from FastAPI
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          upload_url: 'https://b2.example.com/put-signed',
+          object_key: 'whatsapp-media/1234567890123456/photo.jpg',
+        }),
+      } as Response)
+      // 2nd fetch: direct PUT to B2
+      .mockResolvedValueOnce({
+        ok: true,
+      } as Response)
+
+    await runWebhook(IMAGE_MESSAGE)
+
+    expect(h.state.upsertCalls[0].row).toMatchObject({
+      media_url: '/api/whatsapp/media/1234567890123456',
+      media_type: 'image/jpeg',
+      media_key: 'whatsapp-media/1234567890123456/photo.jpg',
+      media_status: 'uploaded',
+    })
+
+    vi.unstubAllEnvs()
+  })
+
+  it('marks media_status failed and preserves message when B2 upload fails', async () => {
+    vi.stubEnv('FASTAPI_BASE_URL', 'http://127.0.0.1:8000')
+    vi.stubEnv('FASTAPI_SERVICE_TOKEN', 'token-123')
+
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('FastAPI unreachable'))
+
+    await runWebhook(IMAGE_MESSAGE)
+
+    expect(h.state.upsertCalls[0].row).toMatchObject({
+      media_url: '/api/whatsapp/media/1234567890123456',
+      media_type: 'image/jpeg',
+      media_status: 'failed',
+    })
+
+    vi.unstubAllEnvs()
+  })
 })
 
 // ============================================================
