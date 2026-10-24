@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseClient } from '@/lib/db';
 import { claimFirstInboundMessage } from './first-inbound'
 
 function conversationsDb(state: { firstInboundAt: string | null; error?: { message: string } }) {

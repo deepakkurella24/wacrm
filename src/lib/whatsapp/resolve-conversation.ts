@@ -18,7 +18,7 @@
 // them to the WhatsApp config owner — a stable account-level default.
 // ============================================================
 
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@/lib/db';
 
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
 import { parseInternationalPhone } from '@/lib/whatsapp/phone-utils';
@@ -203,13 +203,14 @@ async function findOrCreateConversationRow(
         .eq('contact_id', contactId)
         .order('created_at', { ascending: true })
         .limit(1);
-      if (raced && raced.length > 0) {
-        return raced[0].id;
+      const racedList = raced as { id: string }[] | null;
+      if (racedList && racedList.length > 0) {
+        return racedList[0].id;
       }
     }
     console.error('[resolve-conversation] conversation create error:', convErr);
     throw new SendMessageError('db_error', 'Failed to create conversation', 500);
   }
 
-  return newConv.id;
+  return (newConv as { id: string }).id;
 }

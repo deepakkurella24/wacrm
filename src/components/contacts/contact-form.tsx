@@ -49,7 +49,7 @@ export function ContactForm({
 }: ContactFormProps) {
   const t = useTranslations('Contacts.form');
   const supabase = createClient();
-  const { accountId } = useAuth();
+  const { accountId, user } = useAuth();
   const isEdit = !!contact;
 
   const [name, setName] = useState('');
@@ -153,10 +153,6 @@ export function ContactForm({
     setSaving(true);
 
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const user = session?.user;
       if (!user) throw new Error(t('notAuthenticated'));
       if (!accountId) throw new Error(t('notLinkedToAccount'));
 

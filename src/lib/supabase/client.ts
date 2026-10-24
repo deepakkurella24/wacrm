@@ -1,18 +1,8 @@
-import { createBrowserClient } from '@supabase/ssr'
-import type { SupabaseClient } from '@supabase/supabase-js'
+import { createClient as createDbClient } from '@/lib/db/client';
+import type { NeonDatabaseClient } from '@/lib/db/neon-client';
 
-// Singleton instance — one client shared across the whole browser session.
-// Creating multiple clients causes auth-lock contention ("Lock was released
-// because another request stole it") and intermittent fetch failures.
-let browserClient: SupabaseClient | undefined
+export type SupabaseClient = NeonDatabaseClient;
 
 export function createClient() {
-  if (browserClient) return browserClient
-
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co'
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-anon-key'
-
-  browserClient = createBrowserClient(url, anonKey)
-
-  return browserClient
+  return createDbClient();
 }

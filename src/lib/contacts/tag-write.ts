@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@/lib/db';
 import { getT } from '@/lib/i18n/translate';
 import { isUuid } from '@/lib/api/v1/pagination';
 

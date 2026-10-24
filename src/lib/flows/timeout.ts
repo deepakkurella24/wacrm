@@ -1,4 +1,4 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from '@/lib/db';
 import { resolveFallbackPolicy } from "./fallback";
 
 const MS_PER_HOUR = 1000 * 60 * 60;

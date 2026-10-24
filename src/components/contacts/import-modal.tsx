@@ -128,7 +128,7 @@ export function ImportModal({
 }: ImportModalProps) {
   const t = useTranslations('Contacts.importModal');
   const supabase = createClient();
-  const { accountId, canEditSettings } = useAuth();
+  const { accountId, canEditSettings, user } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [file, setFile] = useState<File | null>(null);
@@ -212,10 +212,6 @@ export function ImportModal({
     setImporting(true);
 
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const user = session?.user;
       if (!user) throw new Error(t('notAuthenticated'));
       if (!accountId)
         throw new Error(t('notLinkedToAccount'));
@@ -246,9 +242,9 @@ export function ImportModal({
       const existing = new Set(
         (existingRows ?? [])
           .map(
-            (r) => (r as { phone_normalized: string | null }).phone_normalized
+            (r: any) => r.phone_normalized
           )
-          .filter((p): p is string => !!p)
+          .filter((p: any): p is string => !!p)
       );
 
       const toInsert = unique.filter((row) => {

@@ -1,140 +1,100 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { NextRequest } from "next/server";
 
-// --- Scenario knobs the mock reads -----------------------------------------
-// `mockUser`         — what getUser() resolves to (a refreshed session ⇒ user,
-//                      or null for the logged-out path).
-// `refreshedCookies` — cookies Supabase writes via setAll() during getUser(),
-//                      i.e. the freshly *rotated* auth token. The whole point
-//                      of the test is that these must survive onto whatever
-//                      response the middleware returns — including redirects.
-let mockUser: { id: string } | null = null;
-let refreshedCookies: Array<{
-  name: string;
-  value: string;
-  options: Record<string, unknown>;
-}> = [];
+// Mock @clerk/nextjs/server
+const mockAuth = vi.fn();
 
-vi.mock("@supabase/ssr", () => ({
-  createServerClient: (
-    _url: string,
-    _key: string,
-    opts: {
-      cookies: { setAll: (c: typeof refreshedCookies) => void };
-    },
-  ) => ({
-    auth: {
-      // Mirrors real auth-js: an expired access token is transparently
-      // refreshed inside getUser(), which rotates the refresh token and
-      // pushes the new cookies through setAll() before resolving.
-      getUser: async () => {
-        if (refreshedCookies.length) opts.cookies.setAll(refreshedCookies);
-        return { data: { user: mockUser } };
-      },
-    },
-  }),
+vi.mock("@clerk/nextjs/server", () => ({
+  clerkMiddleware: (handler: any) => {
+    return async (request: any, _event?: any) => {
+      return handler(mockAuth, request);
+    };
+  },
+  createRouteMatcher: (patterns: string[]) => {
+    return (req: any) => {
+      const url = new URL(req.url);
+      const path = url.pathname;
+      return patterns.some((p) => {
+        if (p.endsWith('(.*)')) {
+          const prefix = p.replace('(.*)', '');
+          return path.startsWith(prefix);
+        }
+        return path === p;
+      });
+    };
+  },
 }));
 
-// Imported after the mock is registered.
-const { middleware } = await import("./middleware");
+import middleware from "./middleware";
 
-beforeEach(() => {
-  process.env.NEXT_PUBLIC_SUPABASE_URL = "https://test.supabase.co";
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-key";
-  mockUser = null;
-  refreshedCookies = [];
-});
+const dummyEvent = {} as any;
 
-afterEach(() => vi.clearAllMocks());
-
-const ROTATED = {
-  name: "sb-test-auth-token",
-  value: "rotated-refresh-token",
-  options: { path: "/", httpOnly: true },
-};
-
-describe("middleware — refreshed auth cookies survive redirects", () => {
-  it("carries the rotated token when redirecting a signed-in user off /login", async () => {
-    mockUser = { id: "user-1" };
-    refreshedCookies = [ROTATED];
-
-    const res = await middleware(
-      new NextRequest("https://app.test/login"),
-    );
-
-    // Redirect to /dashboard…
-    expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toContain("/dashboard");
-    // …and the rotated cookie MUST ride along, otherwise the browser keeps
-    // replaying the now-consumed refresh token and the session wedges until
-    // the user manually clears cookies.
-    expect(res.cookies.get(ROTATED.name)?.value).toBe(ROTATED.value);
-  });
-
-  it("carries the rotated token when redirecting an unauth user to /login", async () => {
-    mockUser = null;
-    // Even on the logged-out path getUser() may emit cookie writes (e.g.
-    // clearing a dead session); those must not be dropped on the redirect.
-    refreshedCookies = [{ ...ROTATED, value: "cleared" }];
-
-    const res = await middleware(
-      new NextRequest("https://app.test/dashboard"),
-    );
-
-    expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toContain("/login");
-    expect(res.cookies.get(ROTATED.name)?.value).toBe("cleared");
-  });
-
-  it("redirects a signed-in user with an invite token to /join/<token>", async () => {
-    mockUser = { id: "user-1" };
-    refreshedCookies = [ROTATED];
-
-    const res = await middleware(
-      new NextRequest("https://app.test/login?invite=abc123"),
-    );
-
-    expect(res.headers.get("location")).toContain("/join/abc123");
-    expect(res.cookies.get(ROTATED.name)?.value).toBe(ROTATED.value);
-  });
-
-  it("passes through (no redirect) for a signed-in user on a protected page", async () => {
-    mockUser = { id: "user-1" };
-    refreshedCookies = [ROTATED];
-
-    const res = await middleware(
-      new NextRequest("https://app.test/dashboard"),
-    );
-
-    // No redirect — the normal NextResponse.next() already carries cookies.
-    expect(res.headers.get("location")).toBeNull();
-    expect(res.cookies.get(ROTATED.name)?.value).toBe(ROTATED.value);
-  });
-});
-
-describe("middleware — every dashboard route requires a session", () => {
-  // Read the route group rather than hard-coding a list, so a new page added
-  // under src/app/(dashboard)/ fails here until it is added to
-  // protectedPaths. /flows, /agents and /notifications were missed that way
-  // and rendered a broken page to signed-out visitors instead of redirecting.
+describe("Clerk Middleware — Route Protection", () => {
   const dashboardRoutes = readdirSync(join(__dirname, "app", "(dashboard)"), {
     withFileTypes: true,
   })
     .filter((entry) => entry.isDirectory())
     .map((entry) => `/${entry.name}`);
 
-  it("finds the dashboard route group", () => {
-    expect(dashboardRoutes).toContain("/dashboard");
+  it("identifies remaining dashboard routes", () => {
+    expect(dashboardRoutes).toContain("/inbox");
+    expect(dashboardRoutes).toContain("/contacts");
+    expect(dashboardRoutes).toContain("/flows");
+    expect(dashboardRoutes).toContain("/settings");
   });
 
-  it.each(dashboardRoutes)("redirects a signed-out visitor from %s to /login", async (route) => {
-    mockUser = null;
+  it("allows public webhook routes without authentication", async () => {
+    mockAuth.mockResolvedValue({ userId: null });
+    const req = new NextRequest("https://app.test/api/whatsapp/webhook");
+    const res = await middleware(req, dummyEvent);
+    expect(res?.status).toBe(200);
+  });
 
-    const res = await middleware(new NextRequest(`https://app.test${route}`));
+  it("allows public API v1 routes without Clerk session (uses API keys)", async () => {
+    mockAuth.mockResolvedValue({ userId: null });
+    const req = new NextRequest("https://app.test/api/v1/messages");
+    const res = await middleware(req, dummyEvent);
+    expect(res?.status).toBe(200);
+  });
 
-    expect(res.status).toBe(307);
-    expect(new URL(res.headers.get("location")!).pathname).toBe("/login");
+  it("allows public sign-in and sign-up pages without authentication", async () => {
+    mockAuth.mockResolvedValue({ userId: null });
+    const req1 = new NextRequest("https://app.test/sign-in");
+    const res1 = await middleware(req1, dummyEvent);
+    expect(res1?.status).toBe(200);
+
+    const req2 = new NextRequest("https://app.test/sign-up");
+    const res2 = await middleware(req2, dummyEvent);
+    expect(res2?.status).toBe(200);
+  });
+
+  it.each(dashboardRoutes)("redirects unauthenticated visitor from %s to sign-in", async (route) => {
+    const redirectToSignIn = vi.fn().mockReturnValue({
+      status: 307,
+      headers: new Headers({ location: "https://app.test/sign-in" }),
+    });
+    mockAuth.mockResolvedValue({ userId: null, redirectToSignIn });
+
+    const req = new NextRequest(`https://app.test${route}`);
+    const res = await middleware(req, dummyEvent);
+
+    expect(redirectToSignIn).toHaveBeenCalled();
+    expect(res?.status).toBe(307);
+  });
+
+  it("returns 401 for unauthenticated internal API requests", async () => {
+    mockAuth.mockResolvedValue({ userId: null });
+    const req = new NextRequest("https://app.test/api/contacts");
+    const res = await middleware(req, dummyEvent);
+    expect(res?.status).toBe(401);
+  });
+
+  it("allows authenticated user to access protected routes", async () => {
+    mockAuth.mockResolvedValue({ userId: "user_123" });
+    const req = new NextRequest("https://app.test/inbox");
+    const res = await middleware(req, dummyEvent);
+    expect(res?.status).toBe(200);
   });
 });

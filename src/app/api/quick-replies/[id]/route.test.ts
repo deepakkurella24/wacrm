@@ -10,7 +10,7 @@ vi.mock('@/lib/auth/account', () => ({
   toErrorResponse: vi.fn(() => Response.json({ error: 'auth' }, { status: 403 })),
 }))
 
-vi.mock('@/lib/automations/admin-client', () => ({
+vi.mock('@/lib/flows/admin-client', () => ({
   supabaseAdmin: () => ({
     from: () => {
       let op = 'select'

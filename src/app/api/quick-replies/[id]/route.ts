@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
-import { supabaseAdmin } from '@/lib/automations/admin-client'
+import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { isUuid } from '@/lib/api/v1/pagination'
 import {
   resolveQuickReplyPatch,

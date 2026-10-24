@@ -2,10 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Shared, hoisted state the module mocks close over. Reset per test.
 const h = vi.hoisted(() => ({
-  runAutomationsForTrigger: vi.fn(),
-  resumeAwaitingReply: vi.fn(),
   dispatchInboundToFlows: vi.fn(),
-  dispatchInboundToAiReply: vi.fn(),
   dispatchWebhookEvent: vi.fn(),
   applyMessageStatus: vi.fn(),
   isRenewalsTrigger: vi.fn(),
@@ -61,8 +58,8 @@ vi.mock('next/server', () => ({
   },
 }))
 
-vi.mock('@supabase/supabase-js', () => ({
-  createClient: () => ({
+vi.mock('@/lib/db', () => ({
+  getDb: () => ({
     from(table: string) {
       switch (table) {
         case 'whatsapp_config':
@@ -266,15 +263,8 @@ vi.mock('@/lib/whatsapp/template-webhook', () => ({
     field.startsWith('message_template_'),
   handleTemplateWebhookChange: vi.fn(),
 }))
-vi.mock('@/lib/automations/engine', () => ({
-  runAutomationsForTrigger: h.runAutomationsForTrigger,
-  resumeAwaitingReply: h.resumeAwaitingReply,
-}))
 vi.mock('@/lib/flows/engine', () => ({
   dispatchInboundToFlows: h.dispatchInboundToFlows,
-}))
-vi.mock('@/lib/ai/auto-reply', () => ({
-  dispatchInboundToAiReply: h.dispatchInboundToAiReply,
 }))
 vi.mock('@/lib/webhooks/deliver', () => ({
   dispatchWebhookEvent: h.dispatchWebhookEvent,
@@ -410,8 +400,6 @@ beforeEach(() => {
     contentType: 'image/jpeg',
   })
   h.dispatchInboundToFlows.mockResolvedValue({ consumed: false })
-  h.resumeAwaitingReply.mockResolvedValue(false)
-  h.dispatchInboundToAiReply.mockResolvedValue(undefined)
   h.dispatchWebhookEvent.mockResolvedValue(undefined)
   h.applyMessageStatus.mockResolvedValue([])
   h.isRenewalsTrigger.mockReturnValue(false)
@@ -420,15 +408,6 @@ beforeEach(() => {
   h.isMenuTrigger.mockReturnValue(false)
   h.handleMenuOrGreeting.mockResolvedValue(true)
   h.handleFallbackMessage.mockResolvedValue(false)
-  h.runAutomationsForTrigger.mockImplementation(() => {
-    h.state.automationStarted++
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        h.state.automationCompleted++
-        resolve()
-      }, 0)
-    })
-  })
 })
 
 describe('inbound webhook: idempotent insert (#367)', () => {
@@ -458,8 +437,6 @@ describe('inbound webhook: idempotent insert (#367)', () => {
     // None of the downstream side effects fire on a replay.
     expect(h.state.rpcCalls).toHaveLength(0)
     expect(h.dispatchInboundToFlows).not.toHaveBeenCalled()
-    expect(h.runAutomationsForTrigger).not.toHaveBeenCalled()
-    expect(h.dispatchInboundToAiReply).not.toHaveBeenCalled()
     expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
   })
 })
@@ -502,7 +479,7 @@ describe('inbound webhook: template quick-reply buttons (#478)', () => {
     })
   })
 
-  it('routes the tap to flows and fires the interactive_reply trigger', async () => {
+  it('routes the tap to flows', async () => {
     await runWebhook(templateButtonTap)
 
     expect(h.dispatchInboundToFlows).toHaveBeenCalledWith(
@@ -515,13 +492,6 @@ describe('inbound webhook: template quick-reply buttons (#478)', () => {
         },
       }),
     )
-    const triggers = h.runAutomationsForTrigger.mock.calls.map(
-      (call) => (call[0] as { triggerType: string }).triggerType,
-    )
-    expect(triggers).toContain('interactive_reply')
-    // The AI auto-reply must stay out of it — a button tap is not a
-    // free-text question.
-    expect(h.dispatchInboundToAiReply).not.toHaveBeenCalled()
   })
 
   it('falls back to the label when the template button carries no payload', async () => {
@@ -672,18 +642,6 @@ describe('inbound webhook: inbound media is mirrored (#466)', () => {
     expect(mockGetMediaUrl).not.toHaveBeenCalled()
     expect(h.state.storageUploads).toHaveLength(0)
     expect(h.state.upsertCalls[0].row).toMatchObject({ media_type: null })
-  })
-})
-
-describe('inbound webhook: after() awaits automations (#368)', () => {
-  it('every triggered automation settles before the after() callback resolves', async () => {
-    await runWebhook()
-
-    // first_inbound_message + new_message_received + keyword_match.
-    expect(h.state.automationStarted).toBe(3)
-    // If the dispatches were fire-and-forget, completed would still be 0
-    // here — the callback would have resolved before the timers fired.
-    expect(h.state.automationCompleted).toBe(3)
   })
 })
 
@@ -988,23 +946,6 @@ describe('status webhook: failed statuses keep Meta\'s reason (#535)', () => {
     }
   })
 
-  it('folds the reason into broadcast_recipients.error_message', async () => {
-    h.state.broadcastRecipient = { id: 'rec-1', status: 'sent' }
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      await runStatusWebhook(FAILED_STATUS)
-    } finally {
-      warn.mockRestore()
-    }
-
-    expect(h.state.recipientUpdates).toHaveLength(1)
-    expect(h.state.recipientUpdates[0].status).toBe('failed')
-    const reason = String(h.state.recipientUpdates[0].error_message)
-    expect(reason).toContain('131049')
-    expect(reason).toContain(FAILED_STATUS.errors[0].title)
-    expect(reason).toContain(FAILED_STATUS.errors[0].error_data.details)
-  })
-
   it('a failed status with no errors array still flips status and stores no reason', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
@@ -1017,84 +958,6 @@ describe('status webhook: failed statuses keep Meta\'s reason (#535)', () => {
       status: 'failed',
       failure: null,
     })
-  })
-
-  it('a plain delivered status updates only status — error columns untouched', async () => {
-    h.state.broadcastRecipient = { id: 'rec-1', status: 'sent' }
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      await runStatusWebhook({
-        id: 'wamid.OUT1',
-        status: 'delivered',
-        timestamp: '1700000100',
-        recipient_id: '15551230000',
-      })
-    } finally {
-      warn.mockRestore()
-    }
-
-    expect(warn).not.toHaveBeenCalled()
-    expect(h.applyMessageStatus.mock.calls[0][2]).toMatchObject({
-      status: 'delivered',
-      failure: null,
-    })
-    expect(h.state.recipientUpdates).toHaveLength(1)
-    expect(h.state.recipientUpdates[0]).not.toHaveProperty('error_message')
-    expect(h.state.recipientUpdates[0]).not.toHaveProperty('error_code')
-  })
-
-  it('a late delivered status never regresses a recipient that is already read', async () => {
-    h.state.broadcastRecipient = { id: 'rec-1', status: 'read' }
-    await runStatusWebhook({
-      id: 'wamid.OUT1',
-      status: 'delivered',
-      timestamp: '1700000100',
-      recipient_id: '15551230000',
-    })
-
-    expect(h.applyMessageStatus.mock.calls[0][2]).toMatchObject({
-      status: 'delivered',
-    })
-    expect(h.state.recipientUpdates).toHaveLength(0)
-  })
-})
-
-describe('inbound webhook: automation waiting for a reply', () => {
-  const triggersFired = () =>
-    h.runAutomationsForTrigger.mock.calls.map(
-      (call) => (call[0] as { triggerType: string }).triggerType,
-    )
-
-  it('offers the message to a waiting automation before any trigger fires', async () => {
-    await runWebhook()
-
-    expect(h.resumeAwaitingReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({ message_text: 'hello' }),
-      }),
-    )
-    // Nothing was waiting, so the content triggers fire as normal.
-    expect(triggersFired()).toEqual(
-      expect.arrayContaining(['new_message_received', 'keyword_match']),
-    )
-  })
-
-  it('suppresses content triggers and AI reply when a waiting automation took it', async () => {
-    h.resumeAwaitingReply.mockResolvedValue(true)
-
-    await runWebhook()
-
-    expect(triggersFired()).not.toContain('new_message_received')
-    expect(triggersFired()).not.toContain('keyword_match')
-    expect(h.dispatchInboundToAiReply).not.toHaveBeenCalled()
-  })
-
-  it('leaves the message to a flow that consumed it', async () => {
-    h.dispatchInboundToFlows.mockResolvedValue({ consumed: true })
-
-    await runWebhook()
-
-    expect(h.resumeAwaitingReply).not.toHaveBeenCalled()
   })
 })
 
@@ -1172,34 +1035,7 @@ describe('status webhook: scoped to the receiving number', () => {
   })
 })
 
-describe('inbound webhook: first_inbound_message fires once', () => {
-  const firstInboundRuns = () =>
-    h.runAutomationsForTrigger.mock.calls.filter(
-      ([arg]) => arg.triggerType === 'first_inbound_message',
-    ).length
-
-  it('claims the conversation atomically so a concurrent second message does not refire it', async () => {
-    await runWebhook()
-    h.state.afterCallbacks = []
-    await runWebhook({ ...TEXT_MESSAGE, id: 'wamid.TEST2' })
-
-    expect(h.state.firstInboundClaims).toBe(2)
-    expect(firstInboundRuns()).toBe(1)
-  })
-
-  it('does not claim on a replayed delivery', async () => {
-    h.state.messageUpsertResult = []
-    await runWebhook()
-    expect(h.state.firstInboundClaims).toBe(0)
-  })
-})
-
 describe('inbound webhook: insurance workflow dispatch and precedence', () => {
-  const triggersFired = () =>
-    h.runAutomationsForTrigger.mock.calls.map(
-      (call) => (call[0] as { triggerType: string }).triggerType,
-    )
-
   it('dispatches "Renewals on My Number" to dedicated FastAPI integration and suppresses other flows/triggers', async () => {
     h.isRenewalsTrigger.mockReturnValue(true)
     await runWebhook({ ...TEXT_MESSAGE, text: { body: 'Renewals on My Number' } })
@@ -1214,9 +1050,6 @@ describe('inbound webhook: insurance workflow dispatch and precedence', () => {
     expect(h.dispatchInboundToFlows).not.toHaveBeenCalled()
     expect(h.handleMenuOrGreeting).not.toHaveBeenCalled()
     expect(h.handleFallbackMessage).not.toHaveBeenCalled()
-    expect(triggersFired()).not.toContain('keyword_match')
-    expect(triggersFired()).not.toContain('new_message_received')
-    expect(h.dispatchInboundToAiReply).not.toHaveBeenCalled()
   })
 
   it('dispatches client-configured flows when matched, suppressing menu/greeting/fallback', async () => {
@@ -1226,9 +1059,6 @@ describe('inbound webhook: insurance workflow dispatch and precedence', () => {
     expect(h.dispatchInboundToFlows).toHaveBeenCalledTimes(1)
     expect(h.handleMenuOrGreeting).not.toHaveBeenCalled()
     expect(h.handleFallbackMessage).not.toHaveBeenCalled()
-    expect(triggersFired()).not.toContain('keyword_match')
-    expect(triggersFired()).not.toContain('new_message_received')
-    expect(h.dispatchInboundToAiReply).not.toHaveBeenCalled()
   })
 
   it('dispatches menu trigger when no client flow consumed it', async () => {
@@ -1243,9 +1073,6 @@ describe('inbound webhook: insurance workflow dispatch and precedence', () => {
       }),
     )
     expect(h.handleFallbackMessage).not.toHaveBeenCalled()
-    expect(triggersFired()).not.toContain('keyword_match')
-    expect(triggersFired()).not.toContain('new_message_received')
-    expect(h.dispatchInboundToAiReply).not.toHaveBeenCalled()
   })
 
   it('dispatches greeting trigger when no client flow consumed it', async () => {
@@ -1260,9 +1087,6 @@ describe('inbound webhook: insurance workflow dispatch and precedence', () => {
       }),
     )
     expect(h.handleFallbackMessage).not.toHaveBeenCalled()
-    expect(triggersFired()).not.toContain('keyword_match')
-    expect(triggersFired()).not.toContain('new_message_received')
-    expect(h.dispatchInboundToAiReply).not.toHaveBeenCalled()
   })
 
   it('sends fallback message for unrecognized inbound text', async () => {

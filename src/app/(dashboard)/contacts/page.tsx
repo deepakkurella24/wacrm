@@ -108,7 +108,7 @@ export default function ContactsPage() {
     const { data } = await supabase.from('tags').select('*');
     if (data) {
       const map: Record<string, Tag> = {};
-      data.forEach((t) => (map[t.id] = t));
+      data.forEach((t: Tag) => (map[t.id] = t));
       setTagsMap(map);
       // Drop any filter selections whose tag no longer exists (e.g. a tag
       // deleted elsewhere) so it can't linger invisibly in the query.
@@ -194,7 +194,7 @@ export default function ContactsPage() {
     if (seq !== fetchSeq.current) return; // superseded by a newer fetch
 
     const tagsByContact: Record<string, string[]> = {};
-    contactTags?.forEach((ct) => {
+    contactTags?.forEach((ct: any) => {
       if (!tagsByContact[ct.contact_id]) tagsByContact[ct.contact_id] = [];
       tagsByContact[ct.contact_id].push(ct.tag_id);
     });

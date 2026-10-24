@@ -19,7 +19,7 @@
 // without duplicating ~250 lines of Meta plumbing.
 // ============================================================
 
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@/lib/db';
 
 import {
   sendTextMessage,
@@ -237,7 +237,8 @@ export async function sendMessageToConversation(
     throw new SendMessageError('not_found', 'Conversation not found', 404);
   }
 
-  const contact = conversation.contact;
+  const convRecord = conversation as { contact?: any };
+  const contact = convRecord.contact;
 
   // A contact is addressable by phone number OR by business-scoped user
   // ID. Meta withholds the phone number for a customer who has adopted
@@ -290,12 +291,13 @@ export async function sendMessageToConversation(
         400
       );
     }
-    if (!parent.message_id) {
+    const parentRecord = parent as { message_id?: string | null };
+    if (!parentRecord.message_id) {
       console.warn(
         '[send-message] reply target has no Meta message_id; sending without context'
       );
     } else {
-      contextMessageId = parent.message_id;
+      contextMessageId = parentRecord.message_id;
     }
   }
 
@@ -527,5 +529,5 @@ export async function sendMessageToConversation(
     );
   }
 
-  return { messageId: messageRecord.id, whatsappMessageId: waMessageId };
+  return { messageId: (messageRecord as { id: string }).id, whatsappMessageId: waMessageId };
 }

@@ -40,7 +40,7 @@
  * the stub on (account_id, name, language).
  */
 
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseClient } from '@/lib/db';
 import {
   clearsRejectionReason,
   templateStatusFromWebhookEvent,
@@ -181,7 +181,8 @@ async function handleStatusUpdate(
     )
     return
   }
-  if (!data || data.length === 0) {
+  const rows = data as { id: string }[] | null
+  if (!rows || rows.length === 0) {
     await createStubForUnknownTemplate({
       kind: 'status update',
       metaTemplateId,
@@ -199,9 +200,9 @@ async function handleStatusUpdate(
     })
     return
   }
-  if (data.length > 1) {
+  if (rows.length > 1) {
     console.warn(
-      `[template-webhook] status update matched ${data.length} rows for meta_template_id ${metaTemplateId} — investigate.`,
+      `[template-webhook] status update matched ${rows.length} rows for meta_template_id ${metaTemplateId} — investigate.`,
     )
   }
 }
@@ -247,7 +248,8 @@ async function handleQualityUpdate(
     )
     return
   }
-  if (!data || data.length === 0) {
+  const qualityRows = data as { id: string }[] | null
+  if (!qualityRows || qualityRows.length === 0) {
     // A quality event carries no status. Leave `status` to the column
     // default (DRAFT) rather than guessing APPROVED — Meta does score
     // PAUSED templates too. "Sync from Meta" fixes it up.
@@ -378,7 +380,8 @@ async function createStubForUnknownTemplate(p: StubParams): Promise<void> {
     )
     return
   }
-  if (!data || data.length === 0) {
+  const qualityRows = data as { id: string }[] | null
+  if (!qualityRows || qualityRows.length === 0) {
     console.warn(
       `[template-webhook] ${kind} for unknown template ${where} — a local row with the same name/language exists but is not linked to this meta_template_id; run "Sync from Meta" to link it.`,
     )
