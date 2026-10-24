@@ -25,6 +25,69 @@ export interface ApiKeyRow {
 }
 
 /**
+ * Idempotently ensure the fixed server-side service key is provisioned in the database.
+ * If a row with key_hash already exists, returns its id and account_id.
+ * If not, associates with the primary account (or default) and inserts the row.
+ */
+export async function getOrProvisionFixedServiceKey(
+  keyHash: string,
+  keyPrefix: string
+): Promise<{ id: string; accountId: string } | null> {
+  const admin = supabaseAdmin();
+  try {
+    const { data: existing } = await admin
+      .from('api_keys')
+      .select('id, account_id, scopes')
+      .eq('key_hash', keyHash)
+      .maybeSingle();
+
+    if (existing?.id) {
+      return { id: existing.id, accountId: existing.account_id };
+    }
+
+    // Resolve an account to attach this service key to
+    let accountId = '00000000-0000-0000-0000-000000000000';
+    try {
+      const { data: acc } = await admin
+        .from('accounts')
+        .select('id')
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (acc?.id) accountId = acc.id;
+    } catch {
+      // fallback
+    }
+
+    // Insert new row
+    const { data: inserted, error: insertError } = await admin
+      .from('api_keys')
+      .insert({
+        account_id: accountId,
+        name: 'Fixed Public API Service Key',
+        key_hash: keyHash,
+        key_prefix: keyPrefix,
+        scopes: ['messages:send'],
+        last_used_at: new Date().toISOString(),
+      })
+      .select('id, account_id')
+      .maybeSingle();
+
+    if (inserted?.id) {
+      return { id: inserted.id, accountId: inserted.account_id };
+    }
+
+    if (insertError) {
+      console.error('[api-keys/store] Failed to provision fixed service key:', insertError.message);
+    }
+    return { id: 'fixed-service-key-id', accountId };
+  } catch (err) {
+    console.error('[api-keys/store] Error provisioning fixed service key:', err);
+    return { id: 'fixed-service-key-id', accountId: '00000000-0000-0000-0000-000000000000' };
+  }
+}
+
+/**
  * Look up an *active* key by its SHA-256 hash. Returns null if no
  * row matches, or if the matching row is revoked or expired — so
  * callers never have to re-check liveness. Uses the service-role

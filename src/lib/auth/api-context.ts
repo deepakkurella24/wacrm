@@ -2,10 +2,8 @@
 // Public API authentication — resolve a request's API key into an
 // account context.
 //
-// This is the machine-to-machine counterpart of `getCurrentAccount`
-// (cookie session → account). Where the dashboard authenticates a
-// human via Supabase cookies, the public API authenticates a caller
-// via `Authorization: Bearer wacrm_live_…`.
+// Machine-to-machine counterpart of human session authentication:
+// authenticates a caller via `Authorization: Bearer <key>`.
 //
 // Calling convention — every `/api/v1` route does:
 //
@@ -18,20 +16,21 @@
 //   } catch (err) {
 //     return toApiErrorResponse(err);   // maps ApiError → envelope
 //   }
-//
-// Why a service-role client: an API caller has no Supabase session,
-// so there's no `auth.uid()` for RLS to match. The key lookup itself
-// establishes the account; from there every downstream query MUST be
-// explicitly filtered by `ctx.accountId` (the same discipline the
-// dashboard's send route already follows). The key never escalates
-// past its own account because the account is fixed at lookup time.
 // ============================================================
 
 import type { SupabaseClient } from '@/lib/db';
 
 import { supabaseAdmin } from '@/lib/flows/admin-client';
-import { findActiveKeyByHash, touchLastUsed } from '@/lib/api-keys/store';
-import { hashApiKey, looksLikeApiKey } from '@/lib/api-keys/keys';
+import {
+  findActiveKeyByHash,
+  getOrProvisionFixedServiceKey,
+  touchLastUsed,
+} from '@/lib/api-keys/store';
+import {
+  hashApiKey,
+  looksLikeApiKey,
+  timingSafeHexEqual,
+} from '@/lib/api-keys/keys';
 import { hasScope, type ApiScope } from '@/lib/api-keys/scopes';
 import { forbidden, rateLimited, unauthorized } from '@/lib/api/v1/respond';
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit';
@@ -51,10 +50,19 @@ export interface ApiKeyContext {
   createdBy: string | null;
 }
 
+let fixedKeyCache: {
+  keyHash: string;
+  id: string;
+  accountId: string;
+} | null = null;
+
+export function __resetFixedKeyCacheForTests(): void {
+  fixedKeyCache = null;
+}
+
 /**
  * Extract the bearer token from the `Authorization` header.
- * Tolerates the `Bearer ` prefix being absent (some clients send the
- * bare key) but requires the value to look like one of our keys.
+ * Tolerates the `Bearer ` prefix being absent (some clients send the bare key).
  */
 function extractKey(request: Request): string | null {
   const header = request.headers.get('authorization');
@@ -86,31 +94,62 @@ export async function requireApiKey(
     throw unauthorized();
   }
 
-  // Support server-side WACRM_API_KEY environment variable (e.g. for FastAPI calls)
-  const serverApiKey = process.env.WACRM_API_KEY;
-  if (serverApiKey && presented === serverApiKey) {
-    const admin = supabaseAdmin();
-    let accountId = "00000000-0000-0000-0000-000000000000";
-    try {
-      const { data: acc } = await admin
-        .from("accounts")
-        .select("id")
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      if (acc?.id) accountId = acc.id;
-    } catch {
-      // fallback to default
-    }
+  // Support server-side service credential configured via environment variables
+  // (WACRM_SERVICE_API_KEY or WACRM_API_KEY).
+  const serverApiKey =
+    process.env.WACRM_SERVICE_API_KEY || process.env.WACRM_API_KEY;
 
-    return {
-      authType: "api_key",
-      supabase: admin,
-      accountId,
-      keyId: "server-env-key",
-      scopes: ["messages:send", "messages:write", "contacts:read", "contacts:write"],
-      createdBy: null,
-    };
+  if (serverApiKey) {
+    const presentedHash = hashApiKey(presented);
+    const serverKeyHash = hashApiKey(serverApiKey);
+
+    // Constant-time comparison between hashes
+    if (timingSafeHexEqual(presentedHash, serverKeyHash)) {
+      // Least-privilege: the fixed service key is strictly provisioned with 'messages:send'
+      const serviceScopes = ['messages:send'];
+      if (scope && !hasScope(serviceScopes, scope)) {
+        throw forbidden(`This API key is missing the '${scope}' scope`);
+      }
+
+      // Retrieve or idempotently provision database record and account ID
+      let cached = fixedKeyCache;
+      if (!cached || cached.keyHash !== serverKeyHash) {
+        const prefix =
+          serverApiKey.length >= 8 ? serverApiKey.slice(0, 8) : 'wacrm_fix';
+        const provisioned = await getOrProvisionFixedServiceKey(
+          serverKeyHash,
+          prefix
+        );
+        cached = {
+          keyHash: serverKeyHash,
+          id: provisioned?.id || 'fixed-service-key-id',
+          accountId:
+            provisioned?.accountId || '00000000-0000-0000-0000-000000000000',
+        };
+        fixedKeyCache = cached;
+      }
+
+      // Check per-key rate limit
+      const limit = checkRateLimit(
+        `apikey:${cached.id}`,
+        RATE_LIMITS.publicApi
+      );
+      if (!limit.success) {
+        throw rateLimited(limit);
+      }
+
+      // Touch last_used_at
+      touchLastUsed(cached.id);
+
+      return {
+        authType: 'api_key',
+        supabase: supabaseAdmin(),
+        accountId: cached.accountId,
+        keyId: cached.id,
+        scopes: serviceScopes,
+        createdBy: null,
+      };
+    }
   }
 
   if (!looksLikeApiKey(presented)) {
@@ -119,14 +158,11 @@ export async function requireApiKey(
 
   const row = await findActiveKeyByHash(hashApiKey(presented));
   if (!row) {
-    // Covers unknown, revoked, and expired keys alike — we don't
-    // distinguish them on the wire so a probe can't learn whether a
-    // key ever existed.
+    // Covers unknown, revoked, and expired keys alike
     throw unauthorized();
   }
 
-  // Rate-limit per key, before the scope check, so an unauthorized-
-  // scope caller still can't hammer the endpoint for free.
+  // Rate-limit per key, before the scope check
   const limit = checkRateLimit(`apikey:${row.id}`, RATE_LIMITS.publicApi);
   if (!limit.success) {
     throw rateLimited(limit);

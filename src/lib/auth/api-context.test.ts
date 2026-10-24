@@ -13,19 +13,26 @@ vi.mock("@/lib/flows/admin-client", () => ({
 
 // Mock the store so we control which row a hash resolves to.
 const findActiveKeyByHash = vi.fn<(hash: string) => Promise<ApiKeyRow | null>>();
+const getOrProvisionFixedServiceKey = vi.fn<
+  (keyHash: string, keyPrefix: string) => Promise<{ id: string; accountId: string } | null>
+>();
 const touchLastUsed = vi.fn();
+
 vi.mock("@/lib/api-keys/store", () => ({
   findActiveKeyByHash: (hash: string) => findActiveKeyByHash(hash),
+  getOrProvisionFixedServiceKey: (hash: string, prefix: string) =>
+    getOrProvisionFixedServiceKey(hash, prefix),
   touchLastUsed: (id: string) => touchLastUsed(id),
 }));
 
 // Import AFTER the mocks are registered.
-const { requireApiKey } = await import("./api-context");
+const { requireApiKey, __resetFixedKeyCacheForTests } = await import("./api-context");
 
 const KEY = generateApiKey().plaintext;
+const SERVER_KEY = "wacrm_live_server_secret_test_key_123456789";
 
 function reqWith(authHeader?: string): Request {
-  return new Request("https://crm.example.com/api/v1/me", {
+  return new Request("https://crm.example.com/api/v1/messages", {
     headers: authHeader ? { authorization: authHeader } : {},
   });
 }
@@ -45,12 +52,19 @@ function row(overrides: Partial<ApiKeyRow> = {}): ApiKeyRow {
 
 beforeEach(() => {
   __resetRateLimitForTests();
+  __resetFixedKeyCacheForTests();
   findActiveKeyByHash.mockReset();
+  getOrProvisionFixedServiceKey.mockReset();
   touchLastUsed.mockReset();
+  delete process.env.WACRM_SERVICE_API_KEY;
+  delete process.env.WACRM_API_KEY;
 });
 
 afterEach(() => {
   __resetRateLimitForTests();
+  __resetFixedKeyCacheForTests();
+  delete process.env.WACRM_SERVICE_API_KEY;
+  delete process.env.WACRM_API_KEY;
 });
 
 async function expectApiError(p: Promise<unknown>, code: string, status: number) {
@@ -62,7 +76,7 @@ async function expectApiError(p: Promise<unknown>, code: string, status: number)
   });
 }
 
-describe("requireApiKey", () => {
+describe("requireApiKey - Database API keys", () => {
   it("401s when no Authorization header is present", async () => {
     await expectApiError(requireApiKey(reqWith()), "unauthorized", 401);
     expect(findActiveKeyByHash).not.toHaveBeenCalled();
@@ -119,12 +133,84 @@ describe("requireApiKey", () => {
 
   it("429s once the per-key budget is exhausted", async () => {
     findActiveKeyByHash.mockResolvedValue(row());
-    // Burn the whole window.
     for (let i = 0; i < RATE_LIMITS.publicApi.limit; i++) {
       await requireApiKey(reqWith(`Bearer ${KEY}`));
     }
     await expectApiError(
       requireApiKey(reqWith(`Bearer ${KEY}`)),
+      "rate_limited",
+      429,
+    );
+  });
+});
+
+describe("requireApiKey - Fixed server-side service key", () => {
+  it("authenticates valid server key configured via WACRM_SERVICE_API_KEY", async () => {
+    process.env.WACRM_SERVICE_API_KEY = SERVER_KEY;
+    getOrProvisionFixedServiceKey.mockResolvedValue({
+      id: "srv-key-1",
+      accountId: "srv-acct-1",
+    });
+
+    const ctx = await requireApiKey(reqWith(`Bearer ${SERVER_KEY}`), "messages:send");
+    expect(ctx.authType).toBe("api_key");
+    expect(ctx.accountId).toBe("srv-acct-1");
+    expect(ctx.keyId).toBe("srv-key-1");
+    expect(ctx.scopes).toEqual(["messages:send"]);
+    expect(touchLastUsed).toHaveBeenCalledWith("srv-key-1");
+  });
+
+  it("authenticates valid server key configured via WACRM_API_KEY fallback", async () => {
+    process.env.WACRM_API_KEY = SERVER_KEY;
+    getOrProvisionFixedServiceKey.mockResolvedValue({
+      id: "srv-key-2",
+      accountId: "srv-acct-2",
+    });
+
+    const ctx = await requireApiKey(reqWith(`Bearer ${SERVER_KEY}`));
+    expect(ctx.accountId).toBe("srv-acct-2");
+    expect(ctx.keyId).toBe("srv-key-2");
+    expect(ctx.scopes).toEqual(["messages:send"]);
+  });
+
+  it("enforces least-privilege 403 forbidden for scopes other than messages:send", async () => {
+    process.env.WACRM_SERVICE_API_KEY = SERVER_KEY;
+    getOrProvisionFixedServiceKey.mockResolvedValue({
+      id: "srv-key-1",
+      accountId: "srv-acct-1",
+    });
+
+    await expectApiError(
+      requireApiKey(reqWith(`Bearer ${SERVER_KEY}`), "contacts:write" as any),
+      "forbidden",
+      403,
+    );
+  });
+
+  it("rejects an incorrect key attempting to impersonate server key", async () => {
+    process.env.WACRM_SERVICE_API_KEY = SERVER_KEY;
+    findActiveKeyByHash.mockResolvedValue(null);
+
+    await expectApiError(
+      requireApiKey(reqWith("Bearer wacrm_live_wrong_key_abcdef123456789")),
+      "unauthorized",
+      401,
+    );
+  });
+
+  it("rate limits server key after budget exhaustion", async () => {
+    process.env.WACRM_SERVICE_API_KEY = SERVER_KEY;
+    getOrProvisionFixedServiceKey.mockResolvedValue({
+      id: "srv-key-rate",
+      accountId: "srv-acct-1",
+    });
+
+    for (let i = 0; i < RATE_LIMITS.publicApi.limit; i++) {
+      await requireApiKey(reqWith(`Bearer ${SERVER_KEY}`), "messages:send");
+    }
+
+    await expectApiError(
+      requireApiKey(reqWith(`Bearer ${SERVER_KEY}`), "messages:send"),
       "rate_limited",
       429,
     );

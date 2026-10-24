@@ -1,15 +1,10 @@
 import {
-  Coins,
   FileText,
   Inbox,
-  KeyRound,
   LayoutGrid,
   Palette,
-  PlugZap,
-  Shield,
   Tags,
   User,
-  UsersRound,
   Zap,
   type LucideIcon,
 } from 'lucide-react';
@@ -30,7 +25,6 @@ export const SETTINGS_SECTIONS = [
   'quick-replies',
   'inbox',
   'fields',
-  'api',
 ] as const;
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
@@ -53,7 +47,6 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   'quick-replies': { id: 'quick-replies', label: 'Quick replies', icon: Zap, group: 'workspace' },
   inbox: { id: 'inbox', label: 'Inbox', icon: Inbox, group: 'workspace' },
   fields: { id: 'fields', label: 'Fields & tags', icon: Tags, group: 'workspace' },
-  api: { id: 'api', label: 'API keys', icon: KeyRound, group: 'workspace' },
 };
 
 export const RAIL_GROUPS: { label: string | null; group: SectionMeta['group'] }[] = [

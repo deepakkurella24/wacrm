@@ -44,7 +44,6 @@ export function SettingsOverview({
     let cancelled = false;
     const supabase = createClient();
     const userId = user.id;
-    const acctId = accountId;
 
     // Cheap counts — resolve fast, render immediately.
     (async () => {
@@ -137,11 +136,6 @@ export function SettingsOverview({
       section: 'appearance',
       loading: false,
       subtitle: t('appearance', { mode: cap(mode), theme: themeName }),
-    },
-    {
-      section: 'api',
-      loading: false,
-      subtitle: 'API keys for machine-to-machine integrations',
     },
   ];
 

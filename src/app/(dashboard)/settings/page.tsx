@@ -4,7 +4,6 @@ import { Suspense, useMemo, type ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 
-import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
 import { SettingsRail } from '@/components/settings/settings-rail';
 import { SettingsOverview } from '@/components/settings/settings-overview';
@@ -14,7 +13,6 @@ import { TemplateManager } from '@/components/settings/template-manager';
 import { QuickRepliesManager } from '@/components/settings/quick-replies-manager';
 import { FieldsAndTagsPanel } from '@/components/settings/fields-and-tags-panel';
 import { InboxSettings } from '@/components/settings/inbox-settings';
-import { ApiKeysSettings } from '@/components/settings/api-keys-settings';
 import {
   resolveSection,
   type SettingsSection,
@@ -25,9 +23,8 @@ import {
 // the "missing Suspense with CSR bailout" error and the whole page bails
 // to client-side rendering — shipping a settings screen whose rail never
 // wires up its click handlers. You land on the section the URL carried
-// (the account-menu Settings link points at `?tab=whatsapp`) and can't
-// navigate away. Mirror the login/signup split: a thin wrapper supplies
-// the boundary; the inner component reads the query string.
+// and can't navigate away. Mirror the login/signup split: a thin wrapper
+// supplies the boundary; the inner component reads the query string.
 export default function SettingsPage() {
   return (
     <Suspense fallback={null}>
@@ -39,7 +36,6 @@ export default function SettingsPage() {
 function SettingsPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { defaultCurrency } = useAuth();
   const { mode } = useTheme();
   const t = useTranslations('Settings');
 
@@ -56,7 +52,7 @@ function SettingsPageInner() {
   };
 
   // Cheap, fetch-free rail hints. The Overview landing carries the
-  // full live status/counts; the rail just surfaces the two that are
+  // full live status/counts; the rail just surfaces the one that is
   // already in context.
   const hints: Partial<Record<SettingsSection, ReactNode>> = useMemo(
     () => ({
@@ -73,7 +69,6 @@ function SettingsPageInner() {
     'quick-replies': <QuickRepliesManager />,
     fields: <FieldsAndTagsPanel />,
     inbox: <InboxSettings />,
-    api: <ApiKeysSettings />,
   };
 
   return (
