@@ -7,6 +7,8 @@ const isPublicRoute = createRouteMatcher([
   '/sign-up(.*)',
   '/api/whatsapp/webhook(.*)',
   '/api/v1/(.*)',
+  '/icon',
+  '/favicon.ico',
 ]);
 
 const isApiRoute = createRouteMatcher([

@@ -70,6 +70,17 @@ describe("Clerk Middleware — Route Protection", () => {
     expect(res2?.status).toBe(200);
   });
 
+  it("allows public icon and favicon assets without authentication", async () => {
+    mockAuth.mockResolvedValue({ userId: null });
+    const req1 = new NextRequest("https://app.test/icon");
+    const res1 = await middleware(req1, dummyEvent);
+    expect(res1?.status).toBe(200);
+
+    const req2 = new NextRequest("https://app.test/favicon.ico");
+    const res2 = await middleware(req2, dummyEvent);
+    expect(res2?.status).toBe(200);
+  });
+
   it.each(dashboardRoutes)("redirects unauthenticated visitor from %s to sign-in", async (route) => {
     const redirectToSignIn = vi.fn().mockReturnValue({
       status: 307,

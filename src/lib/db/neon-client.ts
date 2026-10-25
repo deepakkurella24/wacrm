@@ -511,6 +511,26 @@ export function createNeonClient(connectionString?: string): NeonDatabaseClient 
     },
     auth: {
       async getUser() {
+        if (typeof window === 'undefined' && process.env.CLERK_SECRET_KEY) {
+          try {
+            const { auth } = await import('@clerk/nextjs/server');
+            const clerk = await auth();
+            if (clerk?.userId) {
+              return {
+                data: {
+                  user: {
+                    id: clerk.userId,
+                    email: '',
+                    user_metadata: {},
+                  },
+                },
+                error: null,
+              };
+            }
+          } catch {
+            // Not in request context or auth() failed
+          }
+        }
         return { data: { user: null as any }, error: null as any };
       },
       async getSession() {
