@@ -139,10 +139,7 @@ export function ProfileForm() {
               <div className="flex items-start gap-3 rounded-lg border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-900 dark:text-amber-200">
                 <Mail className="mt-0.5 size-4 shrink-0" />
                 <div className="space-y-1">
-                  <p className="font-medium">{t('confirmationEmailSent')}</p>
-                  <p className="text-xs opacity-90">
-                    {t('confirmationEmailSentDesc', { email: email.trim() })}
-                  </p>
+                  <p className="font-medium">{t('profileSavedEmailCheck')}</p>
                 </div>
               </div>
             )}
@@ -150,19 +147,19 @@ export function ProfileForm() {
             {/* Name + email fields */}
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="full_name">{t('nameLabel')}</Label>
+                <Label htmlFor="full_name">{t('displayName')}</Label>
                 <Input
                   id="full_name"
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
-                  placeholder={t('namePlaceholder')}
+                  placeholder={t('fullNamePlaceholder')}
                   disabled={saving}
                   autoComplete="name"
                 />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="email">{t('emailLabel')}</Label>
+                <Label htmlFor="email">{t('email')}</Label>
                 <Input
                   id="email"
                   type="email"
@@ -177,7 +174,7 @@ export function ProfileForm() {
 
             {/* Metadata row */}
             <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-4 text-xs text-muted-foreground">
-              <span>{t('memberSince', { date: joined })}</span>
+              <span>{t('joined')}: {joined}</span>
               {user?.id && (
                 <span className="font-mono text-[11px] opacity-75">
                   ID: {user.id}
@@ -188,7 +185,7 @@ export function ProfileForm() {
             <div className="flex justify-end gap-3 pt-2">
               <Button type="submit" disabled={!dirty || saving}>
                 {saving && <Loader2 className="size-4 animate-spin" />}
-                {t('save')}
+                {t('saveChanges')}
               </Button>
             </div>
           </CardContent>

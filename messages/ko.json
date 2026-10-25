@@ -2022,7 +2022,14 @@
       "signOutEverywhere": "모든 곳에서 로그아웃",
       "signOutFailed": "로그아웃 실패: {message}",
       "avatarAlt": "아바타",
-      "fullNamePlaceholder": "김민지"
+      "fullNamePlaceholder": "김민지",
+      "nameLabel": "표시 이름",
+      "namePlaceholder": "Ada Lovelace",
+      "emailLabel": "이메일",
+      "memberSince": "가입일: {date}",
+      "save": "변경사항 저장",
+      "confirmationEmailSent": "프로필이 저장되었습니다. 이메일을 확인하여 주소 변경을 완료하세요",
+      "confirmationEmailSentDesc": "{email}을(를) 확인하여 주소 변경을 완료하세요"
     },
     "appearance": {
       "title": "화면 설정",

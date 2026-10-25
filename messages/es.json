@@ -2022,7 +2022,14 @@
       "signOutEverywhere": "Cerrar sesión en todas partes",
       "signOutFailed": "Error al cerrar sesión: {message}",
       "avatarAlt": "Avatar",
-      "fullNamePlaceholder": "María García"
+      "fullNamePlaceholder": "María García",
+      "nameLabel": "Nombre visible",
+      "namePlaceholder": "Ada Lovelace",
+      "emailLabel": "Correo electrónico",
+      "memberSince": "Se unió: {date}",
+      "save": "Guardar cambios",
+      "confirmationEmailSent": "Perfil guardado: consulta tu correo electrónico para confirmar el cambio de dirección",
+      "confirmationEmailSentDesc": "Consulta {email} para confirmar el cambio de dirección"
     },
     "appearance": {
       "title": "Apariencia",

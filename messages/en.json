@@ -2022,7 +2022,14 @@
       "signOutEverywhere": "Sign out everywhere",
       "signOutFailed": "Sign-out failed: {message}",
       "avatarAlt": "Avatar",
-      "fullNamePlaceholder": "Ada Lovelace"
+      "fullNamePlaceholder": "Ada Lovelace",
+      "nameLabel": "Display name",
+      "namePlaceholder": "Ada Lovelace",
+      "emailLabel": "Email",
+      "memberSince": "Joined: {date}",
+      "save": "Save changes",
+      "confirmationEmailSent": "Profile saved — check your email to confirm the address change",
+      "confirmationEmailSentDesc": "Check {email} to confirm the address change"
     },
     "appearance": {
       "title": "Appearance",

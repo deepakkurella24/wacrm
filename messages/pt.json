@@ -2022,7 +2022,14 @@
       "signOutEverywhere": "Sair de todos os lugares",
       "signOutFailed": "Falha ao sair: {message}",
       "avatarAlt": "Avatar",
-      "fullNamePlaceholder": "Maria Souza"
+      "fullNamePlaceholder": "Maria Souza",
+      "nameLabel": "Nome de exibição",
+      "namePlaceholder": "Ada Lovelace",
+      "emailLabel": "E-mail",
+      "memberSince": "Entrou em: {date}",
+      "save": "Salvar alterações",
+      "confirmationEmailSent": "Perfil salvo — verifique seu e-mail para confirmar a alteração de endereço",
+      "confirmationEmailSentDesc": "Verifique {email} para confirmar a alteração de endereço"
     },
     "appearance": {
       "title": "Aparência",
