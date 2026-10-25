@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
-import { executeNeonQuery, type QueryPayload } from '@/lib/db/neon-client';
+import { executeNeonQuery, runNeonQuery, type QueryPayload } from '@/lib/db/neon-client';
 import { neon } from '@neondatabase/serverless';
 
 /**
@@ -35,7 +35,8 @@ export async function POST(request: Request) {
 
     // Resolve caller's account_id from profiles
     let accountId: string | null = null;
-    const profileRows = (await (sql as any)(
+    const profileRows = (await runNeonQuery(
+      sql,
       'SELECT account_id FROM profiles WHERE user_id = $1 LIMIT 1',
       [userId],
     )) as { account_id: string }[];
@@ -44,7 +45,8 @@ export async function POST(request: Request) {
       accountId = profileRows[0].account_id;
     } else {
       // First-time Clerk login: provision default account & profile
-      const newAccount = (await (sql as any)(
+      const newAccount = (await runNeonQuery(
+        sql,
         `INSERT INTO accounts (name, owner_user_id, default_currency)
          VALUES ($1, $2, 'INR')
          ON CONFLICT (owner_user_id) DO UPDATE SET updated_at = NOW()
@@ -55,7 +57,8 @@ export async function POST(request: Request) {
       accountId = newAccount[0]?.id;
 
       if (accountId) {
-        await (sql as any)(
+        await runNeonQuery(
+          sql,
           `INSERT INTO profiles (user_id, account_id, account_role, full_name, email)
            VALUES ($1, $2, 'owner', $3, $4)
            ON CONFLICT (user_id) DO NOTHING`,

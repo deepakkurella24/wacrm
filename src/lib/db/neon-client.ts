@@ -198,6 +198,17 @@ export function buildSqlQuery(payload: QueryPayload): { sql: string; params: unk
 }
 
 /**
+ * Safely executes a parameterized SQL query using Neon client.
+ * In @neondatabase/serverless v1+, non-tagged function calls must use sql.query(text, params).
+ */
+export async function runNeonQuery(sql: any, text: string, params: unknown[] = []): Promise<any[]> {
+  if (sql && typeof sql.query === 'function') {
+    return (await sql.query(text, params)) ?? [];
+  }
+  return (await sql(text, params)) ?? [];
+}
+
+/**
  * Executes a query payload using a Neon client.
  */
 export async function executeNeonQuery(
@@ -219,7 +230,7 @@ export async function executeNeonQuery(
     const sql = neon(dbUrl);
     const { sql: querySql, params } = buildSqlQuery(payload);
 
-    const rows = ((await (sql as any)(querySql, params)) ?? []) as Record<string, unknown>[];
+    const rows = ((await runNeonQuery(sql, querySql, params)) ?? []) as Record<string, unknown>[];
 
     if (payload.isSingle) {
       if (!rows || rows.length === 0) {
@@ -475,7 +486,7 @@ export function createNeonClient(connectionString?: string): NeonDatabaseClient 
           });
           call = `"${name}"(${ph.join(', ')})`;
         }
-        const result = (await (sql as any)(`SELECT * FROM ${call}`, params)) as unknown as T;
+        const result = (await runNeonQuery(sql, `SELECT * FROM ${call}`, params)) as unknown as T;
         return { data: result, error: null };
       } catch (err: unknown) {
         return { data: null, error: { message: err instanceof Error ? err.message : String(err) } };
