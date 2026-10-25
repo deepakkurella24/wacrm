@@ -3,18 +3,19 @@
 -- Insurance WhatsApp Inbox Edition
 --
 -- Single-run schema for a blank Neon PostgreSQL database.
--- - All user_id references updated to TEXT for Clerk user IDs (e.g. 'user_2...').
--- - Full multi-tenant account isolation via account_id.
+-- - All user_id references use TEXT for Clerk user IDs (e.g. 'user_2...').
+-- - Multi-tenant account isolation via account_id.
 -- - No Supabase-specific dependencies or auth.users references.
--- - Preserves triggers, functions, atomic webhooks, contacts, tags,
---   conversations, messages, templates, flows, and API keys.
+-- - Essential core: accounts, profiles, contacts, tags, custom fields,
+--   conversations, messages (with Backblaze B2 media), templates,
+--   quick replies, visual flows, API keys, webhooks, and notifications.
 -- ============================================================
 
 -- Enable required standard PostgreSQL extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- Compatibility shim for auth.uid() when running without Supabase Auth
+-- Compatibility shim for auth.uid() when running with Clerk authentication
 CREATE SCHEMA IF NOT EXISTS auth;
 CREATE OR REPLACE FUNCTION auth.uid() RETURNS TEXT AS $$
   SELECT NULLIF(current_setting('app.current_user_id', true), '');
@@ -96,7 +97,7 @@ AS $$
 $$;
 
 -- ============================================================
--- 2. CONTACTS & TAGS
+-- 2. CONTACTS, TAGS & CUSTOM FIELDS
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS contacts (
@@ -169,7 +170,7 @@ CREATE TABLE IF NOT EXISTS contact_notes (
 );
 
 -- ============================================================
--- 3. CONVERSATIONS & MESSAGES
+-- 3. CONVERSATIONS & MESSAGES (Backblaze B2 Media Integration)
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS conversations (
@@ -217,6 +218,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id
 CREATE INDEX IF NOT EXISTS idx_messages_message_id ON messages(message_id);
 CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at ASC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_conversation_message_id ON messages (conversation_id, message_id);
+CREATE INDEX IF NOT EXISTS idx_messages_media_status ON messages(media_status) WHERE media_status IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS message_reactions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -356,56 +358,7 @@ CREATE TABLE IF NOT EXISTS flow_run_events (
 );
 
 -- ============================================================
--- 6. AUTOMATIONS
--- ============================================================
-
-CREATE TABLE IF NOT EXISTS automations (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-  user_id TEXT,
-  name TEXT NOT NULL,
-  description TEXT,
-  event_type TEXT NOT NULL,
-  event_config JSONB DEFAULT '{}'::jsonb,
-  is_active BOOLEAN NOT NULL DEFAULT false,
-  execution_count INTEGER NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS automation_steps (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  automation_id UUID NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
-  step_type TEXT NOT NULL,
-  step_config JSONB NOT NULL DEFAULT '{}'::jsonb,
-  position INTEGER NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS automation_logs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  automation_id UUID NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
-  contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL,
-  status TEXT NOT NULL,
-  error_message TEXT,
-  details JSONB DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS automation_pending_executions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-  automation_id UUID NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
-  step_id UUID NOT NULL REFERENCES automation_steps(id) ON DELETE CASCADE,
-  contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
-  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  scheduled_for TIMESTAMPTZ NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'cancelled', 'failed')),
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- ============================================================
--- 7. API KEYS, WEBHOOKS & NOTIFICATIONS
+-- 6. API KEYS, WEBHOOKS & NOTIFICATIONS
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS api_keys (
@@ -415,7 +368,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   name TEXT NOT NULL,
   key_hash TEXT NOT NULL UNIQUE,
   key_prefix TEXT NOT NULL,
-  scopes TEXT[] NOT NULL DEFAULT ARRAY['messages:write'],
+  scopes TEXT[] NOT NULL DEFAULT ARRAY['messages:send'],
   last_used_at TIMESTAMPTZ,
   expires_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
@@ -443,63 +396,7 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 
 -- ============================================================
--- 8. COMPATIBILITY TABLES (Minimal schema placeholders)
--- ============================================================
-
-CREATE TABLE IF NOT EXISTS pipelines (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  account_id UUID REFERENCES accounts(id) ON DELETE CASCADE,
-  name TEXT NOT NULL DEFAULT 'Default Pipeline',
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS pipeline_stages (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  color TEXT NOT NULL DEFAULT '#3b82f6',
-  position INTEGER NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS deals (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
-  stage_id UUID REFERENCES pipeline_stages(id) ON DELETE CASCADE,
-  contact_id UUID REFERENCES contacts(id) ON DELETE CASCADE,
-  title TEXT NOT NULL,
-  value NUMERIC DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS broadcasts (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  account_id UUID REFERENCES accounts(id) ON DELETE CASCADE,
-  user_id TEXT,
-  name TEXT NOT NULL,
-  template_name TEXT,
-  template_language TEXT,
-  status TEXT DEFAULT 'completed',
-  total_recipients INTEGER DEFAULT 0,
-  sent_count INTEGER DEFAULT 0,
-  delivered_count INTEGER DEFAULT 0,
-  read_count INTEGER DEFAULT 0,
-  failed_count INTEGER DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS broadcast_recipients (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  broadcast_id UUID REFERENCES broadcasts(id) ON DELETE CASCADE,
-  contact_id UUID REFERENCES contacts(id) ON DELETE CASCADE,
-  status TEXT DEFAULT 'sent',
-  message_id TEXT,
-  error_message TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- ============================================================
--- 9. ESSENTIAL STORED PROCEDURES & RPCs
+-- 7. ESSENTIAL STORED PROCEDURES & RPCs
 -- ============================================================
 
 -- Atomic bump conversation on inbound message
@@ -533,21 +430,6 @@ AS $$
   SET runs_count = runs_count + 1,
       updated_at = NOW()
   WHERE id = p_flow_id;
-$$;
-
--- Atomic increment automation execution count
-CREATE OR REPLACE FUNCTION public.increment_automation_execution_count(
-  p_automation_id UUID
-)
-RETURNS VOID
-LANGUAGE sql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-  UPDATE automations
-  SET execution_count = execution_count + 1,
-      updated_at = NOW()
-  WHERE id = p_automation_id;
 $$;
 
 -- Server-side contact tag filter with windowed total count

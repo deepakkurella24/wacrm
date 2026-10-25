@@ -123,7 +123,7 @@ NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/inbox
 
 3. **Configure Meta Webhook**:
    - In Meta for Developers, go to **WhatsApp → Configuration → Callback URL**.
-   - **URL**: `https://abcd-1234.ngrok-free.app/api/whatsapp/webhook`
+   - **URL**: `https://showy-obstruct-suction.ngrok-free.dev/api/whatsapp/webhook`
    - **Verify Token**: Must match `META_WEBHOOK_VERIFY_TOKEN` in your `.env`.
    - Click **Verify and Save**.
    - Under **Webhook fields**, click **Manage** and subscribe to:
