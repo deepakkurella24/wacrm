@@ -124,4 +124,19 @@ describe('Neon Query Builder — SQL Translation', () => {
     expect(sql).toContain('LEFT JOIN "contacts" ct ON ct.id = c.contact_id');
     expect(sql).toContain('row_to_json(ct.*) AS contact');
   });
+
+  it('qualifies ambiguous columns like account_id with table alias on joined select', () => {
+    const { sql, params } = buildSqlQuery({
+      table: 'conversations',
+      action: 'select',
+      columns: '*, contact:contacts(*)',
+      filters: [{ column: 'account_id', op: '=', value: 'acc-1' }],
+      orders: [{ column: 'last_message_at', ascending: false }],
+    });
+
+    expect(sql).toBe(
+      'SELECT c.*, row_to_json(ct.*) AS contact FROM "conversations" c LEFT JOIN "contacts" ct ON ct.id = c.contact_id WHERE c."account_id" = $1 ORDER BY c."last_message_at" DESC'
+    );
+    expect(params).toEqual(['acc-1']);
+  });
 });

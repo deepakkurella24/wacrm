@@ -47,14 +47,61 @@ export function buildSqlQuery(payload: QueryPayload): { sql: string; params: unk
 
   const { table, action, columns, values, filters, orders, limitCount, offsetCount } = payload;
 
+  let mainTableAlias = '';
+  let fromClause = `"${table}"`;
+  let selectClause = '*';
+
+  if (action === 'select') {
+    const rawCols = columns ?? '*';
+
+    if (table === 'conversations' && rawCols.includes('contact:contacts')) {
+      mainTableAlias = 'c';
+      fromClause = `"${table}" c LEFT JOIN "contacts" ct ON ct.id = c.contact_id`;
+      selectClause = `c.*, row_to_json(ct.*) AS contact`;
+    } else if (table === 'contact_tags' && (rawCols.includes('tags(*)') || rawCols.includes('tag:tags'))) {
+      mainTableAlias = 'ct';
+      fromClause = `"${table}" ct LEFT JOIN "tags" t ON t.id = ct.tag_id`;
+      selectClause = `ct.id, ct.contact_id, ct.tag_id, ct.created_at, row_to_json(t.*) AS tags, row_to_json(t.*) AS tag`;
+    } else if (table === 'messages' && rawCols.includes('conversations!inner')) {
+      mainTableAlias = 'm';
+      fromClause = `"${table}" m INNER JOIN "conversations" c ON c.id = m.conversation_id`;
+      selectClause = `m.id, m.conversation_id, m.status, json_build_object('account_id', c.account_id) AS conversations`;
+    } else if (rawCols !== '*') {
+      if (!rawCols.includes('(')) {
+        selectClause = rawCols
+          .split(',')
+          .map((c) => c.trim())
+          .filter(Boolean)
+          .map((c) => (c.includes('"') ? c : `"${c}"`))
+          .join(', ');
+      }
+    }
+  }
+
+  function resolveColumn(rawCol: string): string {
+    if (rawCol.includes('.')) {
+      const parts = rawCol.split('.');
+      const prefix = parts[0];
+      const col = parts.slice(1).join('.');
+      if (prefix === 'ct' || prefix === 'contacts' || prefix === 'contact') return `ct."${col}"`;
+      if (prefix === 'c' || prefix === 'conversations' || prefix === 'conversation') return `c."${col}"`;
+      if (prefix === 't' || prefix === 'tags' || prefix === 'tag') return `t."${col}"`;
+      if (prefix === 'm' || prefix === 'messages' || prefix === 'message') return `m."${col}"`;
+      return `"${rawCol}"`;
+    }
+    if (mainTableAlias) {
+      return `${mainTableAlias}."${rawCol}"`;
+    }
+    return `"${rawCol}"`;
+  }
+
   function buildWhere(): string {
     if (!filters || filters.length === 0) return '';
     const clauses = filters.map((f) => {
       if (f.op === 'raw') {
         return `(${String(f.value)})`;
       }
-      const col = f.column.includes('.') ? f.column.split('.').pop()! : f.column;
-      const safeCol = `"${col}"`;
+      const safeCol = resolveColumn(f.column);
 
       if (f.op === 'IS') {
         if (f.value === null) return `${safeCol} IS NULL`;
@@ -77,37 +124,14 @@ export function buildSqlQuery(payload: QueryPayload): { sql: string; params: unk
   }
 
   if (action === 'select') {
-    const rawCols = columns ?? '*';
-    let selectClause = '*';
-    let fromClause = `"${table}"`;
-
-    if (table === 'conversations' && rawCols.includes('contact:contacts')) {
-      fromClause = `"${table}" c LEFT JOIN "contacts" ct ON ct.id = c.contact_id`;
-      selectClause = `c.*, row_to_json(ct.*) AS contact`;
-    } else if (table === 'contact_tags' && (rawCols.includes('tags(*)') || rawCols.includes('tag:tags'))) {
-      fromClause = `"${table}" ct LEFT JOIN "tags" t ON t.id = ct.tag_id`;
-      selectClause = `ct.id, ct.contact_id, ct.tag_id, ct.created_at, row_to_json(t.*) AS tags, row_to_json(t.*) AS tag`;
-    } else if (table === 'messages' && rawCols.includes('conversations!inner')) {
-      fromClause = `"${table}" m INNER JOIN "conversations" c ON c.id = m.conversation_id`;
-      selectClause = `m.id, m.conversation_id, m.status, json_build_object('account_id', c.account_id) AS conversations`;
-    } else if (rawCols !== '*') {
-      if (!rawCols.includes('(')) {
-        selectClause = rawCols
-          .split(',')
-          .map((c) => c.trim())
-          .filter(Boolean)
-          .map((c) => (c.includes('"') ? c : `"${c}"`))
-          .join(', ');
-      }
-    }
-
     let sql = `SELECT ${selectClause} FROM ${fromClause}${buildWhere()}`;
 
     if (orders && orders.length > 0) {
       const orderClauses = orders.map((o) => {
         const dir = o.ascending ? 'ASC' : 'DESC';
         const nulls = o.nullsFirst !== undefined ? (o.nullsFirst ? ' NULLS FIRST' : ' NULLS LAST') : '';
-        return `"${o.column}" ${dir}${nulls}`;
+        const safeCol = resolveColumn(o.column);
+        return `${safeCol} ${dir}${nulls}`;
       });
       sql += ` ORDER BY ${orderClauses.join(', ')}`;
     }
