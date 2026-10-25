@@ -183,6 +183,10 @@ CREATE TABLE IF NOT EXISTS conversations (
   last_message_text TEXT,
   last_message_at TIMESTAMPTZ,
   unread_count INTEGER DEFAULT 0,
+  first_inbound_at TIMESTAMPTZ,
+  last_inbound_at TIMESTAMPTZ,
+  last_reply_at TIMESTAMPTZ,
+  closed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(account_id, contact_id)
@@ -200,6 +204,7 @@ CREATE TABLE IF NOT EXISTS messages (
   content_type TEXT NOT NULL DEFAULT 'text' CHECK (content_type IN ('text', 'image', 'document', 'audio', 'video', 'location', 'template', 'interactive')),
   content_text TEXT,
   media_url TEXT,
+  media_type TEXT,
   media_key TEXT,                    -- Backblaze B2 object key (e.g. whatsapp-media/<ref>/<file>)
   media_mime_type TEXT,              -- MIME type of the stored media
   media_size BIGINT,                 -- File size in bytes
@@ -208,6 +213,8 @@ CREATE TABLE IF NOT EXISTS messages (
   template_name TEXT,
   message_id TEXT, -- Meta WAMID
   reply_to_message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+  interactive_reply_id TEXT,
+  interactive_payload JSONB,
   status TEXT NOT NULL DEFAULT 'sent' CHECK (status IN ('sending', 'sent', 'delivered', 'read', 'failed')),
   failure_reason TEXT,
   interactive_data JSONB,

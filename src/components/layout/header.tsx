@@ -66,7 +66,11 @@ export function Header({ onOpenSidebar }: HeaderProps) {
           <Menu className="h-5 w-5" />
         </button>
         <h1 className="truncate text-base font-semibold text-foreground sm:text-lg">
-          {t(titleKey as string)}
+          {t.has(titleKey as string)
+            ? t(titleKey as string)
+            : titleKey
+              ? titleKey.charAt(0).toUpperCase() + titleKey.slice(1)
+              : t("inbox")}
         </h1>
       </div>
 

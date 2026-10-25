@@ -58,7 +58,8 @@
     "defaultAvatar": "Avatar",
     "menuProfile": "Perfil",
     "menuSettings": "Configuración",
-    "menuSignOut": "Cerrar sesión"
+    "menuSignOut": "Cerrar sesión",
+    "flows": "Flujos"
   },
   "ModeToggle": {
     "switchMode": "Cambiar al modo {mode}"

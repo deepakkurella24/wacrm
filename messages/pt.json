@@ -58,7 +58,8 @@
     "defaultAvatar": "Avatar",
     "menuProfile": "Perfil",
     "menuSettings": "Configurações",
-    "menuSignOut": "Sair"
+    "menuSignOut": "Sair",
+    "flows": "Fluxos"
   },
   "ModeToggle": {
     "switchMode": "Mudar para o modo {mode}"
