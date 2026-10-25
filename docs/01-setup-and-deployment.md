@@ -11,12 +11,14 @@ WACRM maintains its own dedicated Neon PostgreSQL database (separate from Applic
 1. Log in to [Neon](https://neon.tech) and create a new project (e.g. `wacrm-inbox`).
 2. Open the **SQL Editor** in your Neon dashboard.
 3. Open [`neon_schema.sql`](../neon_schema.sql) in this repository, copy its full contents, paste into the Neon SQL editor, and click **Run**.
-4. Apply the media storage migration:
-   - Run the script in [`migrations/001_add_media_columns.sql`](../migrations/001_add_media_columns.sql).
-5. Copy your connection string:
+   *(This single script creates all 22 tables, Backblaze B2 media columns, indexes, and stored procedures.)*
+4. Copy your connection string from the Neon Dashboard (check the **Pooled connection** box):
    ```env
    DATABASE_URL=postgresql://neondb_owner:password@ep-cool-sample-123456.us-east-2.aws.neon.tech/neondb?sslmode=require
    ```
+
+> [!NOTE]
+> The separate file in [`migrations/001_add_media_columns.sql`](../migrations/001_add_media_columns.sql) is **only needed if you already have an existing database** created prior to the Backblaze B2 media update and want to alter your existing table without recreating it. For any fresh setup, running `neon_schema.sql` is all you need.
 
 ---
 
@@ -119,7 +121,7 @@ NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/inbox
    ```bash
    ngrok http 3000
    ```
-   Copy the assigned HTTPS address (e.g. `https://abcd-1234.ngrok-free.app`).
+   Copy the assigned HTTPS address (e.g. `https://showy-obstruct-suction.ngrok-free.dev`).
 
 3. **Configure Meta Webhook**:
    - In Meta for Developers, go to **WhatsApp → Configuration → Callback URL**.
