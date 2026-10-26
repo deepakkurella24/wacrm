@@ -505,7 +505,24 @@ export function createNeonClient(connectionString?: string): NeonDatabaseClient 
         if (args && Object.keys(args).length > 0) {
           const keys = Object.keys(args);
           const ph = keys.map((k, i) => {
-            params.push(args[k]);
+            let val = args[k];
+            if (
+              val !== null &&
+              typeof val === 'object' &&
+              !(val instanceof Date) &&
+              !Buffer.isBuffer(val)
+            ) {
+              if (
+                !Array.isArray(val) ||
+                k.toLowerCase().includes('node') ||
+                k.toLowerCase().includes('json') ||
+                k.toLowerCase().includes('payload') ||
+                (val.length > 0 && typeof val[0] === 'object')
+              ) {
+                val = JSON.stringify(val);
+              }
+            }
+            params.push(val);
             return `$${i + 1}`;
           });
           call = `"${name}"(${ph.join(', ')})`;
