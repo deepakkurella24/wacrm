@@ -224,6 +224,7 @@ CREATE TABLE IF NOT EXISTS messages (
   status TEXT NOT NULL DEFAULT 'sent' CHECK (status IN ('sending', 'sent', 'delivered', 'read', 'failed')),
   failure_reason TEXT,
   interactive_data JSONB,
+  ai_generated BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -350,6 +351,7 @@ CREATE INDEX IF NOT EXISTS idx_flow_nodes_flow_id ON flow_nodes(flow_id);
 CREATE TABLE IF NOT EXISTS flow_runs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  user_id TEXT,
   flow_id UUID NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
   contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
   conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
@@ -380,6 +382,7 @@ CREATE TABLE IF NOT EXISTS flow_run_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   flow_run_id UUID NOT NULL REFERENCES flow_runs(id) ON DELETE CASCADE,
   node_id UUID REFERENCES flow_nodes(id) ON DELETE SET NULL,
+  node_key TEXT,
   event_type TEXT NOT NULL,
   payload JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW()
