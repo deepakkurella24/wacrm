@@ -11,6 +11,7 @@ import {
   handleMenuOrGreeting,
   handleFallbackMessage,
   getActiveClientWorkflows,
+  buildInteractiveMenuPayload,
   type RenewalsApiResponse,
 } from './renewals-service';
 import * as sendMessageModule from '@/lib/whatsapp/send-message';
@@ -384,6 +385,33 @@ describe('Renewals on My Number Trigger', () => {
       expect(workflows).toHaveLength(1);
       expect(workflows[0].name).toBe('Policy FAQs');
       expect(workflows[0].keywords).toEqual(['faq']);
+    });
+  });
+
+  describe('buildInteractiveMenuPayload', () => {
+    it('creates interactive list payload with rows that have NO description field', () => {
+      const activeWorkflows = [
+        {
+          id: 'wf-1',
+          name: 'Contact Support',
+          keywords: ['support', 'help'],
+        },
+      ];
+      const payload = buildInteractiveMenuPayload(activeWorkflows);
+      expect(payload.kind).toBe('list');
+      expect(payload.button_label).toBe('Menu');
+      expect(payload.sections).toHaveLength(1);
+
+      const section = payload.sections[0];
+      expect(section.title).toBe('Our Services');
+      expect(section.rows).toHaveLength(2);
+
+      // Verify NO row contains a description field
+      section.rows.forEach((row) => {
+        expect(row).toHaveProperty('id');
+        expect(row).toHaveProperty('title');
+        expect(row).not.toHaveProperty('description');
+      });
     });
   });
 

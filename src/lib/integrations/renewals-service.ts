@@ -49,7 +49,13 @@ export function cleanMessageText(rawText: string | null | undefined): string {
  * - Strict exact match: does not trigger on unrelated sentences containing the words
  */
 export function isRenewalsTrigger(rawText: string | null | undefined): boolean {
-  return cleanMessageText(rawText) === 'renewals on my number';
+  const cleaned = cleanMessageText(rawText);
+  if (!cleaned) return false;
+  return (
+    cleaned === 'renewals on my number' ||
+    cleaned === '1. renewals on my number' ||
+    cleaned === '1'
+  );
 }
 
 /**
@@ -154,11 +160,10 @@ export function formatMenuMessage(
 export function buildInteractiveMenuPayload(
   activeWorkflows: ActiveWorkflowItem[] = [],
 ): InteractiveListPayload {
-  const rows: Array<{ id: string; title: string; description?: string }> = [
+  const rows: Array<{ id: string; title: string }> = [
     {
       id: 'renewals_on_my_number',
       title: 'Renewals on My Number',
-      description: 'Check vehicle renewal status',
     },
   ];
 
@@ -167,8 +172,7 @@ export function buildInteractiveMenuPayload(
     if (lower === 'renewals on my number' || lower === 'welcome menu') return;
     const title = wf.name.slice(0, 24);
     const id = wf.keywords.length > 0 ? wf.keywords[0].slice(0, 200) : wf.id;
-    const description = (wf.keywords.length > 0 ? wf.keywords.join(', ') : 'Select service').slice(0, 72);
-    rows.push({ id, title, description });
+    rows.push({ id, title });
   });
 
   return {
