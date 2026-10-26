@@ -105,6 +105,10 @@ CREATE TABLE IF NOT EXISTS contacts (
   account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   user_id TEXT, -- assigned agent user_id
   phone TEXT NOT NULL,
+  phone_normalized TEXT GENERATED ALWAYS AS (regexp_replace(phone, '\D', '', 'g')) STORED,
+  wa_user_id TEXT,
+  wa_parent_user_id TEXT,
+  wa_username TEXT,
   name TEXT,
   email TEXT,
   company TEXT,
@@ -117,6 +121,8 @@ CREATE TABLE IF NOT EXISTS contacts (
 
 CREATE INDEX IF NOT EXISTS idx_contacts_account_id ON contacts(account_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_phone ON contacts(phone);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_account_phone_normalized ON contacts (account_id, phone_normalized) WHERE phone_normalized <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_account_wa_user_id ON contacts (account_id, wa_user_id) WHERE wa_user_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS tags (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -230,13 +236,17 @@ CREATE INDEX IF NOT EXISTS idx_messages_media_status ON messages(media_status) W
 CREATE TABLE IF NOT EXISTS message_reactions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   message_id UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-  sender_type TEXT NOT NULL CHECK (sender_type IN ('customer', 'agent')),
+  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  actor_type TEXT,
+  actor_id TEXT,
+  sender_type TEXT CHECK (sender_type IS NULL OR sender_type IN ('customer', 'agent')),
   sender_id TEXT,
   emoji TEXT NOT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_message_reactions_message ON message_reactions(message_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_message_reactions_actor ON message_reactions (message_id, actor_type, actor_id);
 
 CREATE TABLE IF NOT EXISTS pending_message_statuses (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
