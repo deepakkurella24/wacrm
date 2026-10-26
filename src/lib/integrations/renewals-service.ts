@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@/lib/db';
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message';
+import type { InteractiveListPayload } from '@/lib/whatsapp/interactive';
 
 export interface VehicleRenewalItem {
   registration_number: string;
@@ -145,6 +146,44 @@ export function formatMenuMessage(
 /**
  * Generate a helpful fallback message for unrecognized input.
  */
+/**
+ * Build the interactive list menu payload for WhatsApp.
+ * Header / body greeting users with PULI Insurance Services branding
+ * and listing all active service workflows.
+ */
+export function buildInteractiveMenuPayload(
+  activeWorkflows: ActiveWorkflowItem[] = [],
+): InteractiveListPayload {
+  const rows: Array<{ id: string; title: string; description?: string }> = [
+    {
+      id: 'renewals_on_my_number',
+      title: 'Renewals on My Number',
+      description: 'Check vehicle renewal status',
+    },
+  ];
+
+  activeWorkflows.forEach((wf) => {
+    const lower = wf.name.toLowerCase();
+    if (lower === 'renewals on my number' || lower === 'welcome menu') return;
+    const title = wf.name.slice(0, 24);
+    const id = wf.keywords.length > 0 ? wf.keywords[0].slice(0, 200) : wf.id;
+    const description = (wf.keywords.length > 0 ? wf.keywords.join(', ') : 'Select service').slice(0, 72);
+    rows.push({ id, title, description });
+  });
+
+  return {
+    kind: 'list',
+    body: 'Hello 👋,\nWelcome to PULI Insurance Services\n\nHow may I assist you today? Please select one from the below options 👇',
+    button_label: 'Menu',
+    sections: [
+      {
+        title: 'Our Services',
+        rows: rows.slice(0, 10),
+      },
+    ],
+  };
+}
+
 export function formatFallbackMessage(): string {
   return [
     "Thank you for your message! We couldn't recognize your request.",
@@ -313,13 +352,25 @@ export async function handleMenuOrGreeting(
   const { db, accountId, conversationId, isGreeting: isGreetingMode } = params;
   try {
     const activeWorkflows = await getActiveClientWorkflows(db, accountId);
-    const text = formatMenuMessage(activeWorkflows, isGreetingMode);
-    await sendMessageToConversation(db, accountId, {
-      conversationId,
-      messageType: 'text',
-      contentText: text,
-    });
-    return true;
+    const interactivePayload = buildInteractiveMenuPayload(activeWorkflows);
+
+    try {
+      await sendMessageToConversation(db, accountId, {
+        conversationId,
+        messageType: 'interactive',
+        interactivePayload,
+      });
+      return true;
+    } catch (interactiveErr) {
+      console.warn('[WorkflowDispatcher] Interactive list send failed, falling back to text:', interactiveErr);
+      const text = formatMenuMessage(activeWorkflows, isGreetingMode);
+      await sendMessageToConversation(db, accountId, {
+        conversationId,
+        messageType: 'text',
+        contentText: text,
+      });
+      return true;
+    }
   } catch (err) {
     console.error('[WorkflowDispatcher] Failed to send menu/greeting:', err);
     return false;

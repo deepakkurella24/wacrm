@@ -319,10 +319,15 @@ CREATE TABLE IF NOT EXISTS flows (
   user_id TEXT,
   name TEXT NOT NULL,
   description TEXT,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'active', 'archived')),
   trigger_type TEXT NOT NULL,
   trigger_config JSONB DEFAULT '{}'::jsonb,
+  entry_node_id TEXT,
+  fallback_policy JSONB NOT NULL DEFAULT '{"action":{"type":"handoff"},"max_unrecognized_replies":2}'::jsonb,
   is_active BOOLEAN NOT NULL DEFAULT false,
   runs_count INTEGER NOT NULL DEFAULT 0,
+  execution_count INTEGER NOT NULL DEFAULT 0,
+  last_executed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -353,6 +358,12 @@ CREATE TABLE IF NOT EXISTS flow_runs (
     'paused_by_agent', 'cancelled', 'failed'
   )),
   current_node_id UUID REFERENCES flow_nodes(id) ON DELETE SET NULL,
+  current_node_key TEXT,
+  last_prompt_message_id TEXT,
+  vars JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reprompt_count INTEGER NOT NULL DEFAULT 0,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_advanced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   variables JSONB NOT NULL DEFAULT '{}'::jsonb,
   transition_seq INTEGER NOT NULL DEFAULT 0,
   ended_at TIMESTAMPTZ,

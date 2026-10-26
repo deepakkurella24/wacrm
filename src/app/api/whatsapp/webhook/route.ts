@@ -804,7 +804,7 @@ async function processMessage(
   // vehicle details and 5-min expiring document URLs, and mark consumed.
   // ============================================================
   let flowConsumed = false
-  if (isRenewalsTrigger(inboundText)) {
+  if (isRenewalsTrigger(inboundText) || interactiveReplyId === 'renewals_on_my_number') {
     const verifiedPhone = message.from || contactRecord.phone
     if (verifiedPhone) {
       const handled = await handleRenewalsTrigger({

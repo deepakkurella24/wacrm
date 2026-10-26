@@ -427,14 +427,26 @@ describe('Renewals on My Number Trigger', () => {
         'acc-1',
         expect.objectContaining({
           conversationId: 'conv-1',
-          contentText: expect.stringContaining('Hello! Welcome to our insurance service'),
-        }),
-      );
-      expect(executeSendSpy).toHaveBeenCalledWith(
-        db,
-        'acc-1',
-        expect.objectContaining({
-          contentText: expect.stringContaining('2. Live Agent'),
+          messageType: 'interactive',
+          interactivePayload: expect.objectContaining({
+            kind: 'list',
+            button_label: 'Menu',
+            body: expect.stringContaining('PULI Insurance Services'),
+            sections: expect.arrayContaining([
+              expect.objectContaining({
+                title: 'Our Services',
+                rows: expect.arrayContaining([
+                  expect.objectContaining({
+                    id: 'renewals_on_my_number',
+                    title: 'Renewals on My Number',
+                  }),
+                  expect.objectContaining({
+                    title: 'Live Agent',
+                  }),
+                ]),
+              }),
+            ]),
+          }),
         }),
       );
     });
