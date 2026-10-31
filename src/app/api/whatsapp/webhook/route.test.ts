@@ -1083,9 +1083,9 @@ describe('status webhook: scoped to the receiving number', () => {
 })
 
 describe('inbound webhook: insurance workflow dispatch and precedence', () => {
-  it('dispatches "Renewals on My Number" to dedicated FastAPI integration and suppresses other flows/triggers', async () => {
+  it('dispatches "My Policies" to dedicated FastAPI integration and suppresses other flows/triggers', async () => {
     h.isRenewalsTrigger.mockReturnValue(true)
-    await runWebhook({ ...TEXT_MESSAGE, text: { body: 'Renewals on My Number' } })
+    await runWebhook({ ...TEXT_MESSAGE, text: { body: 'My Policies' } })
 
     expect(h.handleRenewalsTrigger).toHaveBeenCalledWith(
       expect.objectContaining({

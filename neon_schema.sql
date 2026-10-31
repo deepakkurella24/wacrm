@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   name TEXT NOT NULL,
   owner_user_id TEXT NOT NULL, -- Clerk user_id
   default_currency TEXT DEFAULT 'INR',
+  reply_target_minutes INTEGER DEFAULT 15,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -253,15 +254,19 @@ CREATE TABLE IF NOT EXISTS pending_message_statuses (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   message_id TEXT NOT NULL,
+  wamid TEXT,
   status TEXT NOT NULL,
   timestamp TIMESTAMPTZ NOT NULL,
+  status_at TIMESTAMPTZ,
   error_code TEXT,
   error_title TEXT,
   error_message TEXT,
+  error_details TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_pending_statuses_message_id ON pending_message_statuses(message_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_statuses_acc_wamid_stat ON pending_message_statuses (account_id, wamid, status);
 
 -- ============================================================
 -- 4. WHATSAPP CONFIG, TEMPLATES & QUICK REPLIES
@@ -270,6 +275,7 @@ CREATE INDEX IF NOT EXISTS idx_pending_statuses_message_id ON pending_message_st
 CREATE TABLE IF NOT EXISTS whatsapp_config (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  user_id TEXT,
   phone_number_id TEXT NOT NULL,
   waba_id TEXT,
   access_token TEXT NOT NULL,
@@ -290,11 +296,18 @@ CREATE TABLE IF NOT EXISTS message_templates (
   language TEXT DEFAULT 'en_US',
   header_type TEXT CHECK (header_type IN ('text', 'image', 'video', 'document')),
   header_content TEXT,
+  header_handle TEXT,
+  header_media_url TEXT,
+  sample_values JSONB,
   body_text TEXT NOT NULL,
   footer_text TEXT,
   buttons JSONB,
   status TEXT DEFAULT 'APPROVED' CHECK (status IN ('Draft', 'Pending', 'Approved', 'Rejected', 'APPROVED', 'PENDING', 'REJECTED')),
   meta_template_id TEXT,
+  rejection_reason TEXT,
+  quality_score TEXT,
+  submission_error TEXT,
+  last_submitted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(account_id, name, language)
@@ -303,11 +316,23 @@ CREATE TABLE IF NOT EXISTS message_templates (
 CREATE TABLE IF NOT EXISTS quick_replies (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-  shortcut TEXT NOT NULL,
-  content_type TEXT NOT NULL DEFAULT 'text',
-  content TEXT NOT NULL,
+  user_id TEXT,
+  title TEXT,
+  kind TEXT NOT NULL DEFAULT 'text' CHECK (kind IN ('text', 'interactive')),
+  content_text TEXT,
+  interactive_payload JSONB,
+  shortcut TEXT,
+  content_type TEXT DEFAULT 'text',
+  content TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(account_id, shortcut)
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS bot_message_templates (
+  key TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  message_text TEXT NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ============================================================
@@ -396,22 +421,27 @@ CREATE TABLE IF NOT EXISTS api_keys (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   user_id TEXT,
+  created_by TEXT,
   name TEXT NOT NULL,
   key_hash TEXT NOT NULL UNIQUE,
   key_prefix TEXT NOT NULL,
   scopes TEXT[] NOT NULL DEFAULT ARRAY['messages:send'],
   last_used_at TIMESTAMPTZ,
   expires_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS webhook_endpoints (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  created_by TEXT,
   url TEXT NOT NULL,
   secret TEXT NOT NULL,
   events TEXT[] NOT NULL DEFAULT ARRAY['*'],
   is_active BOOLEAN NOT NULL DEFAULT true,
+  failure_count INTEGER DEFAULT 0,
+  last_delivery_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -423,6 +453,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   content TEXT,
   type TEXT NOT NULL DEFAULT 'info',
   is_read BOOLEAN NOT NULL DEFAULT false,
+  read_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

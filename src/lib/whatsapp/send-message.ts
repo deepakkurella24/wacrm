@@ -80,6 +80,7 @@ export interface SendMessageParams {
   messageType: string;
   contentText?: string | null;
   mediaUrl?: string | null;
+  mediaKey?: string | null;
   filename?: string | null;
   templateName?: string | null;
   templateLanguage?: string | null;
@@ -197,6 +198,7 @@ export async function sendMessageToConversation(
     messageType,
     contentText,
     mediaUrl,
+    mediaKey,
     filename,
     templateName,
     templateLanguage,
@@ -341,12 +343,35 @@ export async function sendMessageToConversation(
       return result.messageId;
     }
     if (isMediaKind) {
+      let targetMediaId: string | undefined;
+      let targetLink: string | undefined;
+
+      const trimmed = (mediaUrl || '').trim();
+      const proxyMatch = trimmed.match(/\/api\/whatsapp\/media\/([^\/?#]+)/);
+      const extractedKey = proxyMatch ? proxyMatch[1] : trimmed;
+
+      if (/^\d{10,}$/.test(extractedKey)) {
+        targetMediaId = extractedKey;
+      } else if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+        targetLink = trimmed;
+      } else if (process.env.WACRM_APP_URL && trimmed.startsWith('/')) {
+        const base = process.env.WACRM_APP_URL.replace(/\/+$/, '');
+        if (!base.includes('localhost') && !base.includes('127.0.0.1')) {
+          targetLink = `${base}${trimmed}`;
+        } else {
+          targetLink = trimmed;
+        }
+      } else {
+        targetLink = trimmed || undefined;
+      }
+
       const result = await sendMediaMessage({
         phoneNumberId: phoneNumberId,
         accessToken,
         to: phone,
         kind: messageType as MediaKind,
-        link: mediaUrl!,
+        mediaId: targetMediaId,
+        link: targetLink,
         caption: contentText || undefined,
         filename: filename || undefined,
         contextMessageId,
@@ -471,6 +496,9 @@ export async function sendMessageToConversation(
         messageType === 'template'
           ? templateHeaderMediaUrl(templateRow, templateMessageParams)
           : mediaUrl || null,
+      media_key: mediaKey ?? null,
+      media_status: mediaKey ? 'uploaded' : null,
+      media_filename: filename ?? null,
       template_name: templateName || null,
       interactive_payload:
         messageType === 'interactive' ? interactivePayload : null,

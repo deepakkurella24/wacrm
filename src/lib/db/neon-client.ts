@@ -56,7 +56,21 @@ export function buildSqlQuery(payload: QueryPayload): { sql: string; params: unk
 
     if (table === 'conversations' && rawCols.includes('contact:contacts')) {
       mainTableAlias = 'c';
-      fromClause = `"${table}" c LEFT JOIN "contacts" ct ON ct.id = c.contact_id`;
+      if (rawCols.includes('contact_tags')) {
+        fromClause = `"${table}" c LEFT JOIN (
+          SELECT ct_inner.*,
+            COALESCE(
+              (SELECT json_agg(json_build_object('tags', row_to_json(t.*)))
+               FROM contact_tags ctag
+               JOIN tags t ON t.id = ctag.tag_id
+               WHERE ctag.contact_id = ct_inner.id),
+              '[]'::json
+            ) AS contact_tags
+          FROM contacts ct_inner
+        ) ct ON ct.id = c.contact_id`;
+      } else {
+        fromClause = `"${table}" c LEFT JOIN "contacts" ct ON ct.id = c.contact_id`;
+      }
       selectClause = `c.*, row_to_json(ct.*) AS contact`;
     } else if (table === 'contact_tags' && (rawCols.includes('tags(*)') || rawCols.includes('tag:tags'))) {
       mainTableAlias = 'ct';
@@ -66,6 +80,24 @@ export function buildSqlQuery(payload: QueryPayload): { sql: string; params: unk
       mainTableAlias = 'm';
       fromClause = `"${table}" m INNER JOIN "conversations" c ON c.id = m.conversation_id`;
       selectClause = `m.id, m.conversation_id, m.status, json_build_object('account_id', c.account_id) AS conversations`;
+    } else if (table === 'flow_runs') {
+      const hasFlows = rawCols.includes('flows(') || rawCols.includes('flows (');
+      const hasContacts = rawCols.includes('contact:contacts') || rawCols.includes('contacts(') || rawCols.includes('contacts (');
+      if (hasFlows || hasContacts) {
+        mainTableAlias = 'fr';
+        let joins = '';
+        let extraCols = '';
+        if (hasFlows) {
+          joins += ' LEFT JOIN "flows" fl ON fl.id = fr.flow_id';
+          extraCols += ', row_to_json(fl.*) AS flows';
+        }
+        if (hasContacts) {
+          joins += ' LEFT JOIN "contacts" ct ON ct.id = fr.contact_id';
+          extraCols += ', row_to_json(ct.*) AS contact';
+        }
+        fromClause = `"${table}" fr${joins}`;
+        selectClause = `fr.*${extraCols}`;
+      }
     } else if (rawCols !== '*') {
       if (!rawCols.includes('(')) {
         selectClause = rawCols
@@ -87,6 +119,8 @@ export function buildSqlQuery(payload: QueryPayload): { sql: string; params: unk
       if (prefix === 'c' || prefix === 'conversations' || prefix === 'conversation') return `c."${col}"`;
       if (prefix === 't' || prefix === 'tags' || prefix === 'tag') return `t."${col}"`;
       if (prefix === 'm' || prefix === 'messages' || prefix === 'message') return `m."${col}"`;
+      if (prefix === 'fr' || prefix === 'flow_runs') return `fr."${col}"`;
+      if (prefix === 'fl' || prefix === 'flows') return `fl."${col}"`;
       return `"${rawCol}"`;
     }
     if (mainTableAlias) {
@@ -514,9 +548,13 @@ export function createNeonClient(connectionString?: string): NeonDatabaseClient 
             ) {
               if (
                 !Array.isArray(val) ||
+                name === 'replace_flow_nodes' ||
                 k.toLowerCase().includes('node') ||
                 k.toLowerCase().includes('json') ||
                 k.toLowerCase().includes('payload') ||
+                k.toLowerCase().includes('var') ||
+                k.toLowerCase().includes('config') ||
+                k.toLowerCase().includes('meta') ||
                 (val.length > 0 && typeof val[0] === 'object')
               ) {
                 val = JSON.stringify(val);

@@ -8,14 +8,9 @@ import { useAuth } from "@/hooks/use-auth";
 import { useTotalUnread } from "@/hooks/use-total-unread";
 import { useUnreadNotifications } from "@/hooks/use-unread-notifications";
 import {
-  Bell,
-  Bot,
   Crown,
-  GitBranch,
-  LayoutDashboard,
   LogOut,
   MessageSquare,
-  Radio,
   Settings,
   Shield,
   User,
@@ -24,7 +19,7 @@ import {
   UsersRound,
   Workflow,
   X,
-  Zap,
+  type LucideIcon,
 } from "lucide-react";
 import type { AccountRole } from "@/lib/auth/roles";
 
@@ -81,7 +76,7 @@ import {
 interface NavItem {
   href: string;
   labelKey: string;
-  icon: typeof LayoutDashboard;
+  icon: LucideIcon;
   /**
    * When true, the nav row renders a small "Beta" chip after the label.
    * Purely informational — doesn't affect routing or access.

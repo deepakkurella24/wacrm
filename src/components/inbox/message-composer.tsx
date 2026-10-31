@@ -18,7 +18,6 @@ import {
   Square,
   X,
   Loader2,
-  Sparkles,
   Plus,
   MessageSquareDashed,
   Zap,
@@ -73,6 +72,7 @@ export interface SendMediaPayload {
   kind: ComposerMediaKind;
   /** Public chat-media URL Meta fetches at send time. */
   mediaUrl: string;
+  mediaKey?: string | null;
   /** Storage object path — lets the caller GC the object if the send fails. */
   path: string;
   /** Optional caption (image/video/document only). */
@@ -103,6 +103,7 @@ const PICKER_ACCEPT: Record<"image" | "video" | "document", string> = {
 interface MediaDraft {
   kind: ComposerMediaKind;
   mediaUrl: string;
+  remoteUrl?: string;
   /** Storage path — used to GC the object if the draft is discarded. */
   path: string;
   filename: string;
@@ -146,7 +147,6 @@ export function MessageComposer({
 
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
-  const [drafting, setDrafting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Enter-to-send only on devices with a mouse/keyboard (fine pointer).
@@ -269,49 +269,6 @@ export function MessageComposer({
     [adjustHeight]
   );
 
-  // Ask the AI assistant for a suggested reply and drop it into the
-  // composer for the agent to edit + send. Read-only server-side —
-  // nothing is sent until the agent hits Send.
-  const handleDraft = useCallback(async () => {
-    if (drafting) return;
-    setDrafting(true);
-    try {
-      const res = await fetch("/api/ai/draft", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ conversation_id: conversationId }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        if (data.code === "ai_not_configured") {
-          toast.error(t("aiNotConfigured"));
-        } else {
-          toast.error(data.error ?? t("draftFailed"));
-        }
-        return;
-      }
-      const draftText = typeof data.draft === "string" ? data.draft.trim() : "";
-      if (!draftText) {
-        toast.error(t("draftEmpty"));
-        return;
-      }
-      setText(draftText);
-      // Let the textarea grow to fit and drop the cursor at the end so
-      // the agent can tweak immediately.
-      requestAnimationFrame(() => {
-        adjustHeight();
-        const el = textareaRef.current;
-        if (el) {
-          el.focus();
-          el.setSelectionRange(el.value.length, el.value.length);
-        }
-      });
-    } catch {
-      toast.error(t("aiUnreachable"));
-    } finally {
-      setDrafting(false);
-    }
-  }, [drafting, conversationId, adjustHeight, t]);
 
   // ---- Interactive message + quick replies --------------------------
 
@@ -414,12 +371,14 @@ export function MessageComposer({
         return;
       }
       setBusy(true);
+      const localPreviewUrl = URL.createObjectURL(file);
       try {
         const { publicUrl, path } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
         // Replacing an existing draft? GC the previous object first.
         removeStaged(draftRef.current?.path);
-        setDraft({ kind, mediaUrl: publicUrl, path, filename: file.name, caption: "" });
+        setDraft({ kind, mediaUrl: localPreviewUrl, remoteUrl: publicUrl, path, filename: file.name, caption: "" });
       } catch (err) {
+        URL.revokeObjectURL(localPreviewUrl);
         toast.error(err instanceof Error ? err.message : t("uploadFailed"));
       } finally {
         setBusy(false);
@@ -452,11 +411,13 @@ export function MessageComposer({
         return;
       }
       setBusy(true);
+      const localPreviewUrl = URL.createObjectURL(file);
       try {
         const { publicUrl, path } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
         removeStaged(draftRef.current?.path);
-        setDraft({ kind: "audio", mediaUrl: publicUrl, path, filename: file.name, caption: "" });
+        setDraft({ kind: "audio", mediaUrl: localPreviewUrl, remoteUrl: publicUrl, path, filename: file.name, caption: "" });
       } catch (err) {
+        URL.revokeObjectURL(localPreviewUrl);
         toast.error(err instanceof Error ? err.message : t("uploadFailed"));
       } finally {
         setBusy(false);
@@ -526,7 +487,7 @@ export function MessageComposer({
     if (!draft || busy) return;
     onSendMedia({
       kind: draft.kind,
-      mediaUrl: draft.mediaUrl,
+      mediaUrl: draft.remoteUrl || draft.mediaUrl,
       path: draft.path,
       // Audio takes no caption (Meta rejects it). Everything else: the
       // trimmed caption, or undefined when blank.
@@ -535,16 +496,21 @@ export function MessageComposer({
       filename: draft.kind === "document" ? draft.filename : undefined,
       replyToId: replyTo?.id,
     });
-    // The object is now owned by the sent message — clear without GC.
+    if (draft.mediaUrl.startsWith("blob:")) {
+      URL.revokeObjectURL(draft.mediaUrl);
+    }
     setDraft(null);
     onClearReply?.();
   }, [draft, busy, onSendMedia, replyTo?.id, onClearReply]);
 
   // Discard GCs the staged object — it was uploaded but never sent.
   const discardDraft = useCallback(() => {
+    if (draft?.mediaUrl.startsWith("blob:")) {
+      URL.revokeObjectURL(draft.mediaUrl);
+    }
     removeStaged(draft?.path);
     setDraft(null);
-  }, [draft?.path, removeStaged]);
+  }, [draft?.path, draft?.mediaUrl, removeStaged]);
 
   const setCaption = useCallback((caption: string) => {
     setDraft((d) => (d ? { ...d, caption } : d));
@@ -730,22 +696,6 @@ export function MessageComposer({
             <LayoutTemplate className="h-4 w-4" />
           </GatedButton>
 
-          <GatedButton
-            variant="ghost"
-            size="sm"
-            canAct={!readOnly}
-            gateReason={tGate("reasons.sendMessages")}
-            disabled={drafting}
-            title={readOnly ? undefined : t("draftWithAI")}
-            className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-primary"
-            onClick={handleDraft}
-          >
-            {drafting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Sparkles className="h-4 w-4" />
-            )}
-          </GatedButton>
           </div>
 
           <textarea

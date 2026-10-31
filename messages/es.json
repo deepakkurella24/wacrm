@@ -122,20 +122,10 @@
           "afternoon": "Buenas tardes",
           "evening": "Buenas noches"
         },
-        "contextWaiting": "{count, plural, =1 {1 cliente espera respuesta,} other {# clientes esperan respuesta,}} el más antiguo desde hace {wait}.",
         "contextClear": "Ahora mismo nadie espera respuesta.",
         "contextSetup": "Termina la configuración para empezar a recibir mensajes de WhatsApp aquí.",
-        "rangeLabel": "Periodo",
-        "range": {
-          "1": "Hoy",
-          "7": "7 días",
-          "30": "30 días",
-          "90": "90 días"
-        },
         "new": "Nuevo",
         "newContact": "Nuevo contacto",
-        "newDeal": "Nuevo negocio",
-        "newBroadcast": "Nueva difusión",
         "newAutomation": "Nueva automatización"
       },
       "health": {
@@ -1606,9 +1596,6 @@
       "notSetup": "Aún sin configurar",
       "connected": "Conectado",
       "needsReconnecting": "Necesita reconectarse",
-      "viewTeamMembers": "Ver miembros del equipo",
-      "membersCount": "{count} {count, plural, =1 {miembro} other {miembros}}",
-      "pendingInvites": "{count} {count, plural, =1 {invitación pendiente} other {invitaciones pendientes}}",
       "manageTemplates": "Administrar plantillas de mensaje",
       "templatesCount": "{count} {count, plural, =1 {plantilla} other {plantillas}}",
       "pendingReview": "{count} en revisión",

@@ -17,8 +17,6 @@ import { SettingsChip } from './settings-chip';
 import { ROLE_META } from './role-meta';
 
 interface OverviewCounts {
-  members: number | null;
-  pendingInvites: number | null;
   templates: number | null;
   templatesPending: number | null;
   tags: number | null;
@@ -69,8 +67,6 @@ export function SettingsOverview({
       if (cancelled) return;
 
       setCounts({
-        members: null,
-        pendingInvites: null,
         templates:
           templatesTotal.status === 'fulfilled'
             ? templatesTotal.value.count ?? null

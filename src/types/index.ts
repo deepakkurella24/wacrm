@@ -183,18 +183,6 @@ export interface Conversation {
   created_at: string;
   updated_at: string;
   contact?: Contact;
-  /**
-   * AI auto-reply state for this thread (migration 029 + 033):
-   *  - `ai_autoreply_disabled` — the bot is paused here (a human took
-   *    over, or the model handed off). Sticky until re-enabled.
-   *  - `ai_reply_count` — how many times the bot has auto-replied,
-   *    checked against the account's per-conversation cap.
-   *  - `ai_handoff_summary` — short internal note the bot wrote when it
-   *    handed off, shown to whoever takes the thread over.
-   */
-  ai_autoreply_disabled?: boolean;
-  ai_reply_count?: number;
-  ai_handoff_summary?: string | null;
 }
 
 // ============================================================
@@ -376,49 +364,6 @@ export interface MessageTemplate {
   created_at: string;
 }
 
-export interface Pipeline {
-  id: string;
-  user_id: string;
-  name: string;
-  created_at: string;
-}
-
-export interface PipelineStage {
-  id: string;
-  pipeline_id: string;
-  name: string;
-  position: number;
-  color: string;
-  created_at: string;
-}
-
-export type DealStatus = 'open' | 'won' | 'lost';
-
-export interface Deal {
-  id: string;
-  user_id: string;
-  pipeline_id: string;
-  stage_id: string;
-  /**
-   * Nullable after migration 004 — becomes NULL when the referenced
-   * contact is deleted (ON DELETE SET NULL). History preserved.
-   */
-  contact_id: string | null;
-  conversation_id?: string;
-  assigned_to?: string;
-  title: string;
-  value: number;
-  currency?: string;
-  notes?: string;
-  expected_close_date?: string;
-  status?: DealStatus;
-  created_at: string;
-  updated_at?: string;
-  contact?: Contact;
-  stage?: PipelineStage;
-  assignee?: Profile;
-}
-
 export type BroadcastStatus = 'draft' | 'scheduled' | 'sending' | 'sent' | 'failed';
 export type RecipientStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'replied' | 'failed';
 
@@ -504,7 +449,6 @@ export type AutomationStepType =
   | 'remove_tag'
   | 'assign_conversation'
   | 'update_contact_field'
-  | 'create_deal'
   | 'wait'
   | 'condition'
   | 'send_webhook'
@@ -597,13 +541,6 @@ export interface UpdateContactFieldStepConfig {
   value: string;
 }
 
-export interface CreateDealStepConfig {
-  pipeline_id: string;
-  stage_id: string;
-  title: string;
-  value?: number;
-}
-
 export interface WaitStepConfig {
   amount: number;
   unit: 'minutes' | 'hours' | 'days';
@@ -638,7 +575,6 @@ export type AutomationStepConfig =
   | TagStepConfig
   | AssignConversationStepConfig
   | UpdateContactFieldStepConfig
-  | CreateDealStepConfig
   | WaitStepConfig
   | ConditionStepConfig
   | SendWebhookStepConfig

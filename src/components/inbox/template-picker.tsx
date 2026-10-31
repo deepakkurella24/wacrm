@@ -95,26 +95,13 @@ export function TemplatePicker({
     (async () => {
       setLoading(true);
       const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
 
-      if (!user) {
-        if (!cancelled) {
-          setTemplates([]);
-          setLoading(false);
-        }
-        return;
-      }
-
-      // Scope by RLS (message_templates_select → is_account_member), NOT by
-      // user_id. Templates are account-owned, so filtering on the caller's
-      // user_id hid templates that a teammate created — leaving them unable
-      // to send approved templates in a shared account.
+      // Fetch approved templates. Templates are account-owned,
+      // and RLS / Neon proxy enforces account scoping.
       const { data, error } = await supabase
         .from("message_templates")
         .select("*")
-        .eq("status", "APPROVED")
+        .in("status", ["APPROVED", "Approved"])
         .order("created_at", { ascending: false });
 
       if (cancelled) return;

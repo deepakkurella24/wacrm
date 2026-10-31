@@ -57,12 +57,25 @@ export async function POST(request: Request) {
       accountId = newAccount[0]?.id;
 
       if (accountId) {
+        let fullName = 'Agent';
+        let email = 'agent@insurance.local';
+        try {
+          const { currentUser } = await import('@clerk/nextjs/server');
+          const u = await currentUser();
+          if (u) {
+            fullName = [u.firstName, u.lastName].filter(Boolean).join(' ') || u.username || 'Agent';
+            email = u.emailAddresses?.[0]?.emailAddress || 'agent@insurance.local';
+          }
+        } catch {
+          // fallback
+        }
+
         await runNeonQuery(
           sql,
           `INSERT INTO profiles (user_id, account_id, account_role, full_name, email)
            VALUES ($1, $2, 'owner', $3, $4)
            ON CONFLICT (user_id) DO NOTHING`,
-          [userId, accountId, 'Agent', 'agent@insurance.local'],
+          [userId, accountId, fullName, email],
         );
       }
     }

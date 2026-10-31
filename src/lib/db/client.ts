@@ -75,6 +75,24 @@ export function createClient(): NeonDatabaseClient {
     },
     auth: {
       async getUser() {
+        if (typeof window !== 'undefined') {
+          const clerkUser = (window as any).Clerk?.user;
+          if (clerkUser) {
+            return {
+              data: {
+                user: {
+                  id: clerkUser.id,
+                  email: clerkUser.primaryEmailAddress?.emailAddress ?? '',
+                  user_metadata: {
+                    avatar_url: clerkUser.imageUrl,
+                    full_name: clerkUser.fullName,
+                  },
+                },
+              },
+              error: null,
+            };
+          }
+        }
         return { data: { user: null as any }, error: null as any };
       },
       async getSession() {

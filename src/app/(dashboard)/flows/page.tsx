@@ -13,9 +13,6 @@ import {
   PlayCircle,
   PauseCircle,
   Archive,
-  HelpCircle,
-  UserPlus,
-  FileText,
 } from "lucide-react";
 
 import { useTranslations } from "next-intl";
@@ -67,21 +64,6 @@ const STATUS_COLORS: Record<FlowRow["status"], string> = {
   archived: "border-border bg-muted/50 text-muted-foreground",
 };
 
-interface TemplateSummary {
-  slug: string;
-  name: string;
-  description: string;
-  icon: "MessageSquare" | "HelpCircle" | "UserPlus";
-  trigger_type: string;
-  node_count: number;
-}
-
-const TEMPLATE_ICONS = {
-  MessageSquare,
-  HelpCircle,
-  UserPlus,
-} as const;
-
 export default function FlowsPage() {
   const router = useRouter();
   const canCreate = useCan("send-messages");
@@ -92,29 +74,23 @@ export default function FlowsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
-  const [templates, setTemplates] = useState<TemplateSummary[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [flowsRes, tmplRes] = await Promise.all([
-          fetch("/api/flows"),
-          fetch("/api/flows/templates"),
-        ]);
+        const flowsRes = await fetch("/api/flows");
         if (!flowsRes.ok) {
           throw new Error(`Failed to load flows: ${flowsRes.status}`);
         }
         const flowsJson = (await flowsRes.json()) as { flows: FlowRow[] };
-        if (!cancelled) setFlows(flowsJson.flows ?? []);
-        // Templates endpoint is forward-looking — if it 404s on an
-        // older deployment, gracefully fall through.
-        if (tmplRes.ok) {
-          const tmplJson = (await tmplRes.json()) as {
-            templates: TemplateSummary[];
-          };
-          if (!cancelled) setTemplates(tmplJson.templates ?? []);
-        }
+        const userFlows = (flowsJson.flows ?? []).filter(
+          (f) =>
+            !["renewals on my number", "my reenewals", "my renewals", "my policies", "my policy", "welcome menu"].includes(
+              (f.name || "").trim().toLowerCase()
+            )
+        );
+        if (!cancelled) setFlows(userFlows);
       } catch (err) {
         if (!cancelled) {
           console.error(err);
@@ -150,29 +126,6 @@ export default function FlowsPage() {
     } catch (err) {
       console.error(err);
       toast.error(t("createError"));
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  async function handleUseTemplate(slug: string) {
-    setCreating(true);
-    try {
-      const res = await fetch("/api/flows", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ template_slug: slug }),
-      });
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({}));
-        throw new Error(json.error ?? t("cloneFailedStatus", { status: res.status }));
-      }
-      const json = (await res.json()) as { flow: FlowRow };
-      setCreateOpen(false);
-      router.push(`/flows/${json.flow.id}`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : t("cloneError");
-      toast.error(msg);
     } finally {
       setCreating(false);
     }
@@ -245,11 +198,7 @@ export default function FlowsPage() {
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        {/* `sm:max-w-4xl` not `max-w-4xl` — shadcn's DialogContent has
-            `sm:max-w-sm` baked into its default classes. Without the
-            sm: prefix our override applies at base only and the
-            sm-scoped 384px wins at every real desktop breakpoint. */}
-        <DialogContent className="sm:max-w-4xl bg-popover text-popover-foreground">
+        <DialogContent className="sm:max-w-md bg-popover text-popover-foreground">
           <DialogHeader>
             <DialogTitle>{t("createTitle")}</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -257,48 +206,13 @@ export default function FlowsPage() {
             </DialogDescription>
           </DialogHeader>
 
-          {templates.length > 0 && (
-            <div className="space-y-3">
-              <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                {t("startTemplate")}
-              </p>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {templates.map((template) => {
-                  const Icon = TEMPLATE_ICONS[template.icon] ?? FileText;
-                  return (
-                    <button
-                      key={template.slug}
-                      type="button"
-                      onClick={() => handleUseTemplate(template.slug)}
-                      disabled={creating}
-                      className="flex flex-col gap-2.5 rounded-lg border border-border bg-background p-4 text-left transition-colors hover:border-primary/40 hover:bg-muted disabled:opacity-50"
-                    >
-                      <Icon className="h-5 w-5 text-primary" />
-                      <span className="text-sm font-semibold text-popover-foreground">
-                        {template.name}
-                      </span>
-                      <span className="text-xs leading-relaxed text-muted-foreground">
-                        {template.description}
-                      </span>
-                      <span className="mt-auto border-t border-border pt-2 text-[11px] text-muted-foreground">
-                        {t("nodeCount", { count: template.node_count })}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          <div className="space-y-2 border-t border-border pt-4">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">
-              {t("startBlank")}
-            </p>
+          <div className="py-2">
             <Input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               placeholder={t("placeholderName")}
               className="bg-muted"
+              autoFocus
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleCreate();
               }}
@@ -314,7 +228,7 @@ export default function FlowsPage() {
               {t("cancel")}
             </Button>
             <Button onClick={handleCreate} disabled={!newName.trim() || creating}>
-              {creating && <Loader2 className="h-4 w-4 animate-spin" />}
+              {creating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {t("createBlank")}
             </Button>
           </DialogFooter>

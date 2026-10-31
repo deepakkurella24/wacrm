@@ -12,34 +12,81 @@ import {
   handleFallbackMessage,
   getActiveClientWorkflows,
   buildInteractiveMenuPayload,
+  DEFAULT_RENEWALS_HEADER_MESSAGE,
+  DEFAULT_UNRECOGNIZED_MESSAGE,
   type RenewalsApiResponse,
 } from './renewals-service';
 import * as sendMessageModule from '@/lib/whatsapp/send-message';
 
-describe('Renewals on My Number Trigger', () => {
+describe('Renewals Integration & Triggers', () => {
   describe('isRenewalsTrigger matcher', () => {
-    it('matches exact trigger text case-insensitively', () => {
-      expect(isRenewalsTrigger('Renewals on My Number')).toBe(true);
-      expect(isRenewalsTrigger('renewals on my number')).toBe(true);
-      expect(isRenewalsTrigger('RENEWALS ON MY NUMBER')).toBe(true);
+    it('matches configured trigger "My Policies" and singular "My Policy" case-insensitively', () => {
+      expect(isRenewalsTrigger('My Policies')).toBe(true);
+      expect(isRenewalsTrigger('my policies')).toBe(true);
+      expect(isRenewalsTrigger('MY POLICIES')).toBe(true);
+      expect(isRenewalsTrigger('My Policy')).toBe(true);
+      expect(isRenewalsTrigger('my policy')).toBe(true);
+      expect(isRenewalsTrigger('MY POLICY')).toBe(true);
+    });
+
+    it('matches legacy triggers "My Renewals" and singular "My Renewal" case-insensitively', () => {
+      expect(isRenewalsTrigger('My Renewal')).toBe(true);
+      expect(isRenewalsTrigger('my renewal')).toBe(true);
+      expect(isRenewalsTrigger('MY RENEWAL')).toBe(true);
+      expect(isRenewalsTrigger('My Renewals')).toBe(true);
+      expect(isRenewalsTrigger('my renewals')).toBe(true);
+      expect(isRenewalsTrigger('MY RENEWALS')).toBe(true);
+    });
+
+    it('matches variant "My Reenewals" and singular "My Reenewal" gracefully', () => {
+      expect(isRenewalsTrigger('My Reenewal')).toBe(true);
+      expect(isRenewalsTrigger('my reenewal')).toBe(true);
+      expect(isRenewalsTrigger('My Reenewals')).toBe(true);
+      expect(isRenewalsTrigger('my reenewals')).toBe(true);
+      expect(isRenewalsTrigger('MY REENEWALS')).toBe(true);
+    });
+
+    it('matches numeric option prefix "1. My Policies", "1. My Policy", "1. My Renewal", "1. My Renewals", and "1"', () => {
+      expect(isRenewalsTrigger('1. My Policies')).toBe(true);
+      expect(isRenewalsTrigger('1. my policies')).toBe(true);
+      expect(isRenewalsTrigger('1. My Policy')).toBe(true);
+      expect(isRenewalsTrigger('1. my policy')).toBe(true);
+      expect(isRenewalsTrigger('1. My Renewal')).toBe(true);
+      expect(isRenewalsTrigger('1. my renewal')).toBe(true);
+      expect(isRenewalsTrigger('1. My Renewals')).toBe(true);
+      expect(isRenewalsTrigger('1. my renewals')).toBe(true);
+      expect(isRenewalsTrigger('1. My Reenewals')).toBe(true);
+      expect(isRenewalsTrigger('1. my reenewals')).toBe(true);
+      expect(isRenewalsTrigger('1')).toBe(true);
     });
 
     it('matches with leading/trailing whitespace and multiple internal spaces', () => {
-      expect(isRenewalsTrigger('   renewals   on   my   number   ')).toBe(true);
-      expect(isRenewalsTrigger('\nrenewals on my number\t')).toBe(true);
+      expect(isRenewalsTrigger('   my   policies   ')).toBe(true);
+      expect(isRenewalsTrigger('\nmy policies\t')).toBe(true);
+      expect(isRenewalsTrigger('   my   renewals   ')).toBe(true);
+      expect(isRenewalsTrigger('\nmy renewals\t')).toBe(true);
+      expect(isRenewalsTrigger('   my   reenewals   ')).toBe(true);
     });
 
-    it('matches with standard trailing punctuation', () => {
-      expect(isRenewalsTrigger('renewals on my number.')).toBe(true);
-      expect(isRenewalsTrigger('Renewals on My Number!')).toBe(true);
-      expect(isRenewalsTrigger('"Renewals on My Number"')).toBe(true);
+    it('matches with standard trailing and leading punctuation', () => {
+      expect(isRenewalsTrigger('my policies.')).toBe(true);
+      expect(isRenewalsTrigger('My Policies!')).toBe(true);
+      expect(isRenewalsTrigger('"My Policies"')).toBe(true);
+      expect(isRenewalsTrigger('my renewals.')).toBe(true);
+      expect(isRenewalsTrigger('My Renewals!')).toBe(true);
+      expect(isRenewalsTrigger('"My Renewals"')).toBe(true);
+      expect(isRenewalsTrigger('my reenewals.')).toBe(true);
+      expect(isRenewalsTrigger('My Reenewals!')).toBe(true);
+      expect(isRenewalsTrigger('"My Reenewals"')).toBe(true);
     });
 
     it('rejects unrelated messages containing similar words', () => {
-      expect(isRenewalsTrigger('What are renewals on my number?')).toBe(false);
-      expect(isRenewalsTrigger('renewals on my number and my car')).toBe(false);
+      expect(isRenewalsTrigger('What are my reenewals?')).toBe(false);
+      expect(isRenewalsTrigger('my reenewals and my car')).toBe(false);
+      expect(isRenewalsTrigger('What are my renewals?')).toBe(false);
       expect(isRenewalsTrigger('renewals')).toBe(false);
       expect(isRenewalsTrigger('my number')).toBe(false);
+      expect(isRenewalsTrigger('Renewals on My Number')).toBe(false); // Old trigger rejected
       expect(isRenewalsTrigger('')).toBe(false);
       expect(isRenewalsTrigger(null)).toBe(false);
       expect(isRenewalsTrigger(undefined)).toBe(false);
@@ -56,26 +103,46 @@ describe('Renewals on My Number Trigger', () => {
       expect(text).toContain('No registered vehicles or policy renewals were found');
     });
 
-    it('formats multiple vehicles matching user specification', () => {
+    it('formats multiple vehicles matching user specification with Telugu header and statuses', () => {
       const response: RenewalsApiResponse = {
         found: true,
         customer_name: 'Test Customer',
         vehicles: [
           {
             registration_number: 'AP20BA1232',
-            model: 'Model',
-            payment_status: 'PAID',
-            balance_due: 0,
+            model: 'Honda City',
+            policy_status: 'ACTIVE',
+            policy_period_start: '10-07-2026',
+            policy_period_end: '09-07-2027',
             policy_document_url: 'https://storage.example.com/doc1.pdf',
             payment_url: null,
+            payment_status: 'PAID',
+            balance_due: 0,
           },
           {
             registration_number: 'AP22BC1222',
-            model: 'Model',
+            model: 'Hyundai Creta',
+            policy_status: 'ACTIVE',
+            policy_period_start: '10-11-2025',
+            policy_period_end: '09-11-2026',
+            policy_document_url: 'https://storage.example.com/doc2.pdf',
+            renewal_status: 'RENEWAL_MODE',
+            renewal_premium: 12500,
+            payment_url: 'https://pay.insurer.com/creta123',
             payment_status: 'UNPAID',
             balance_due: 12500,
-            policy_document_url: null,
-            payment_url: 'https://pay.insurer.com/invoice123',
+          },
+          {
+            registration_number: 'AP37BM2821',
+            model: 'Hero Glamour',
+            policy_status: 'EXPIRED',
+            policy_period_start: '10-10-2025',
+            policy_period_end: '09-10-2026',
+            policy_document_url: 'https://storage.example.com/doc_prev.pdf',
+            renewal_premium: 1196,
+            payment_url: 'https://pay.insurer.com/glamour123',
+            payment_status: 'UNPAID',
+            balance_due: 1196,
           },
         ],
       };
@@ -83,22 +150,31 @@ describe('Renewals on My Number Trigger', () => {
       const reply = formatRenewalsReply(response);
 
       // Header
-      expect(reply).toContain('Your Vehicle Renewal Details');
+      expect(reply).toContain('మీ పాలసీల వివరాలు:');
 
-      // Vehicle 1: Completed payment with policy document
-      expect(reply).toContain('1. AP20BA1232 – Model');
-      expect(reply).toContain('Payment status: ✅ Payment completed');
-      expect(reply).toContain('Policy document: https://storage.example.com/doc1.pdf');
-      expect(reply).not.toContain('Balance due: ₹0');
+      // Vehicle 1: Active with completed period and proof document
+      expect(reply).toContain(
+        '1. AP20BA1232 – Honda City\nPolicy status: Active ✅\nPolicy Period: 10-07-2026 to 09-07-2027\nPolicy document 📄: https://storage.example.com/doc1.pdf'
+      );
 
-      // Vehicle 2: Pending payment with balance and customer payment link
-      expect(reply).toContain('2. AP22BC1222 – Model');
-      expect(reply).toContain('Payment status: ⏳ Payment pending');
-      expect(reply).toContain('Balance due: ₹12,500');
-      expect(reply).toContain('Payment link: https://pay.insurer.com/invoice123');
+      // Vehicle 2: Active in Renewal Mode with upcoming premium and link
+      expect(reply).toContain(
+        '2. AP22BC1222 – Hyundai Creta\nPolicy status: Active ✅\nPolicy Period: 10-11-2025 to 09-11-2026\nPolicy document 📄: https://storage.example.com/doc2.pdf\nRenewal status: Renewal Mode 🔁\nRenewal premium: ₹12,500\nPayment link: https://pay.insurer.com/creta123'
+      );
 
-      // 5-minute expiry warning appended because vehicle 1 has a document link
-      expect(reply).toContain('⚠️ Policy document links expire in 5 minutes. Please download your document immediately.');
+      // Vehicle 3: Expired with previous document and pending renewal link
+      expect(reply).toContain(
+        '3. AP37BM2821 – Hero Glamour\nPolicy status: Expired 🚫\nPolicy Period: 10-10-2025 to 09-10-2026\nPolicy document 📄: https://storage.example.com/doc_prev.pdf\nRenewal premium: ₹1,196\nPayment link: https://pay.insurer.com/glamour123'
+      );
+
+      // 5-minute expiry warning appended because document link exists
+      expect(reply).toContain('⚠️ డాక్యుమెంట్ లింక్ 5 నిమిషాల్లో ఎక్స్పైర్ అవుతుంది. వెంటనే డౌన్లోడ్ చేసుకోండి.');
+
+      // Support contact footer
+      expect(reply).toContain('ఇతర వివరములు మరియు సహాయం కొరకు ఈ క్రింది నెంబర్ల కి కాల్ చేయండి:');
+      expect(reply).toContain('9640050096');
+      expect(reply).toContain('9491675999');
+      expect(reply).toContain('9908967599');
     });
 
     it('omits 5-minute expiry warning if no policy document exists', () => {
@@ -117,7 +193,36 @@ describe('Renewals on My Number Trigger', () => {
       };
 
       const reply = formatRenewalsReply(response);
-      expect(reply).not.toContain('Policy document links expire in 5 minutes');
+      expect(reply).not.toContain('5 నిమిషాల్లో');
+    });
+
+    it('formats a renewed policy as Active with renewed dates and document', () => {
+      const response: RenewalsApiResponse = {
+        found: true,
+        vehicles: [
+          {
+            registration_number: 'AP22BC1222',
+            model: 'Hyundai Creta',
+            policy_status: 'ACTIVE',
+            policy_period_start: '10-10-2026',
+            policy_period_end: '09-10-2027',
+            policy_document_url: 'https://storage.example.com/creta_renewed.pdf',
+            renewal_status: null,
+            renewal_premium: null,
+            payment_url: null,
+            payment_status: 'PAID',
+            balance_due: 0,
+          },
+        ],
+      };
+
+      const reply = formatRenewalsReply(response);
+      expect(reply).toContain('1. AP22BC1222 – Hyundai Creta');
+      expect(reply).toContain('Policy status: Active ✅');
+      expect(reply).toContain('Policy Period: 10-10-2026 to 09-10-2027');
+      expect(reply).toContain('Policy document 📄: https://storage.example.com/creta_renewed.pdf');
+      expect(reply).not.toContain('Payment link:');
+      expect(reply).not.toContain('Renewal premium:');
     });
   });
 
@@ -146,8 +251,8 @@ describe('Renewals on My Number Trigger', () => {
         json: async () => mockData,
       } as Response);
 
-      const result = await fetchCustomerRenewals('919876543210');
-      expect(result).toEqual(mockData);
+      const result = await fetchCustomerRenewals('+91-98765-43210');
+      expect(result.found).toBe(true);
 
       expect(fetchSpy).toHaveBeenCalledWith(
         'https://api.example.com/api/v1/integrations/renewals-by-phone?phone=919876543210',
@@ -167,6 +272,11 @@ describe('Renewals on My Number Trigger', () => {
       } as Response);
 
       await expect(fetchCustomerRenewals('9876543210')).rejects.toThrow('FastAPI responded with HTTP 500');
+    });
+
+    it('throws when request times out or network fails', async () => {
+      vi.spyOn(global, 'fetch').mockRejectedValueOnce(new Error('Network error'));
+      await expect(fetchCustomerRenewals('9876543210')).rejects.toThrow('Failed to reach renewal service');
     });
   });
 
@@ -308,11 +418,11 @@ describe('Renewals on My Number Trigger', () => {
       { id: 'wf-2', name: 'Branch Locations', keywords: ['branch', 'office'] },
     ];
 
-    it('formats menu in standard mode', () => {
+    it('formats menu in standard mode with configured trigger', () => {
       const menu = formatMenuMessage(mockWorkflows, false);
       expect(menu).not.toContain('Hello! Welcome');
       expect(menu).toContain('Available Services:');
-      expect(menu).toContain('1. Renewals on My Number');
+      expect(menu).toContain('1. My Policies');
       expect(menu).toContain('2. File a Claim');
       expect(menu).toContain('3. Branch Locations');
       expect(menu).toContain('Reply with any option above, or send MENU at any time');
@@ -322,30 +432,29 @@ describe('Renewals on My Number Trigger', () => {
       const menu = formatMenuMessage(mockWorkflows, true);
       expect(menu).toContain('Hello! Welcome to our insurance service');
       expect(menu).toContain('Available Services:');
-      expect(menu).toContain('1. Renewals on My Number');
+      expect(menu).toContain('1. My Policies');
       expect(menu).toContain('2. File a Claim');
       expect(menu).toContain('3. Branch Locations');
     });
 
-    it('deduplicates Renewals on My Number if client flow shares the same name', () => {
+    it('deduplicates My Policies if client flow shares the same name', () => {
       const wfsWithDuplicate = [
-        { id: 'wf-0', name: 'Renewals on My Number', keywords: ['renewals'] },
+        { id: 'wf-0', name: 'My Policies', keywords: ['policies'] },
         { id: 'wf-1', name: 'File a Claim', keywords: ['claim'] },
       ];
       const menu = formatMenuMessage(wfsWithDuplicate, false);
-      const count = (menu.match(/Renewals on My Number/g) || []).length;
+      const count = (menu.match(/My Policies/g) || []).length;
       expect(count).toBe(1);
-      expect(menu).toContain('1. Renewals on My Number');
+      expect(menu).toContain('1. My Policies');
       expect(menu).toContain('2. File a Claim');
     });
   });
 
   describe('formatFallbackMessage', () => {
-    it('returns helpful instructions referencing MENU and Renewals on My Number', () => {
+    it('returns helpful Telugu instructions with menu guidance', () => {
       const fallback = formatFallbackMessage();
-      expect(fallback).toContain("couldn't recognize your request");
-      expect(fallback).toContain('*MENU*');
-      expect(fallback).toContain('*Renewals on My Number*');
+      expect(fallback).toContain('మీ మెసేజ్ వచ్చింది, కానీ అర్థం కాలేదు.');
+      expect(fallback).toContain('కింద ఉన్న లిస్ట్ లో నుండి ఒక ఆప్షన్ సెలెక్ట్ చేయండి 👇');
     });
   });
 
@@ -389,7 +498,7 @@ describe('Renewals on My Number Trigger', () => {
   });
 
   describe('buildInteractiveMenuPayload', () => {
-    it('creates interactive list payload with rows that have NO description field', () => {
+    it('creates interactive list payload with configured My Policies title and NO row descriptions', () => {
       const activeWorkflows = [
         {
           id: 'wf-1',
@@ -405,6 +514,7 @@ describe('Renewals on My Number Trigger', () => {
       const section = payload.sections[0];
       expect(section.title).toBe('Our Services');
       expect(section.rows).toHaveLength(2);
+      expect(section.rows[0].title).toBe('My Policies');
 
       // Verify NO row contains a description field
       section.rows.forEach((row) => {
@@ -466,7 +576,7 @@ describe('Renewals on My Number Trigger', () => {
                 rows: expect.arrayContaining([
                   expect.objectContaining({
                     id: 'renewals_on_my_number',
-                    title: 'Renewals on My Number',
+                    title: 'My Policies',
                   }),
                   expect.objectContaining({
                     title: 'Live Agent',
@@ -479,7 +589,7 @@ describe('Renewals on My Number Trigger', () => {
       );
     });
 
-    it('handleFallbackMessage sends standard unrecognized message fallback', async () => {
+    it('handleFallbackMessage sends interactive menu list with Telugu prompt', async () => {
       const executeSendSpy = vi
         .spyOn(sendMessageModule, 'sendMessageToConversation')
         .mockResolvedValueOnce({ messageId: 'm2', whatsappMessageId: 'wamid2' });
@@ -497,10 +607,39 @@ describe('Renewals on My Number Trigger', () => {
         'acc-1',
         expect.objectContaining({
           conversationId: 'conv-1',
-          contentText: expect.stringContaining("couldn't recognize your request"),
+          messageType: 'interactive',
+          interactivePayload: expect.objectContaining({
+            kind: 'list',
+            button_label: 'Menu',
+            body: expect.stringContaining('మీ మెసేజ్ వచ్చింది'),
+          }),
+        }),
+      );
+    });
+
+    it('handleFallbackMessage falls back to text menu if interactive list fails', async () => {
+      const executeSendSpy = vi
+        .spyOn(sendMessageModule, 'sendMessageToConversation')
+        .mockRejectedValueOnce(new Error('Interactive list rejected'))
+        .mockResolvedValueOnce({ messageId: 'm3', whatsappMessageId: 'wamid3' });
+
+      const db: any = {};
+      const handled = await handleFallbackMessage({
+        db,
+        accountId: 'acc-1',
+        conversationId: 'conv-1',
+      });
+
+      expect(handled).toBe(true);
+      expect(executeSendSpy).toHaveBeenCalledWith(
+        db,
+        'acc-1',
+        expect.objectContaining({
+          conversationId: 'conv-1',
+          messageType: 'text',
+          contentText: expect.stringContaining('మీ మెసేజ్ వచ్చింది'),
         }),
       );
     });
   });
 });
-

@@ -799,7 +799,7 @@ async function processMessage(
   const inboundText = contentText ?? message.text?.body ?? ''
 
   // ============================================================
-  // Hardcoded Trigger: "Renewals on My Number"
+  // Policy / Renewal Trigger: "My Policies" (or "My Renewals")
   // If matched, query FastAPI using verified sender phone, reply with
   // vehicle details and 5-min expiring document URLs, and mark consumed.
   // ============================================================

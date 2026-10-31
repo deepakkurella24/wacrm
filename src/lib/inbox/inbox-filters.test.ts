@@ -77,10 +77,6 @@ describe("applyInboxFilter", () => {
     expect(applyInboxFilter(list, "waiting", NOW).map((c) => c.id)).toEqual(["old", "recent"]);
   });
 
-  it("lists open chats nobody is assigned to", () => {
-    expect(applyInboxFilter(list, "unassigned", NOW).map((c) => c.id)).toEqual(["recent", "answered"]);
-  });
-
   it("keeps the existing unread and status filters", () => {
     expect(applyInboxFilter(list, "unread", NOW).map((c) => c.id)).toEqual(["unread"]);
     expect(applyInboxFilter(list, "pending", NOW).map((c) => c.id)).toEqual(["pending"]);

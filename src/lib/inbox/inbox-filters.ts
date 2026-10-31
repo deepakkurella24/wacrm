@@ -4,7 +4,6 @@ export const INBOX_FILTERS = [
   "all",
   "unread",
   "waiting",
-  "unassigned",
   "expiring",
   "open",
   "pending",
@@ -52,8 +51,6 @@ export function applyInboxFilter(
       return conversations.filter(isAwaitingReply).sort(byOldestInbound);
     case "expiring":
       return conversations.filter((c) => isWindowClosing(c, now)).sort(byOldestInbound);
-    case "unassigned":
-      return conversations.filter((c) => c.status === "open" && !c.assigned_agent_id);
     default:
       return conversations.filter((c) => c.status === (filter as ConversationStatus));
   }

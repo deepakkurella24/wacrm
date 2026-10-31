@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useTranslations } from 'next-intl';
-import { Loader2, Mail, CircleAlert } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -13,21 +13,18 @@ import {
 } from '@/components/ui/avatar';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/use-auth';
-import { createClient } from '@/lib/supabase/client';
+import { createClient } from '@/lib/db/client';
 import { SettingsPanelHead } from './settings-panel-head';
 import { BrowserNotificationsCard } from './browser-notifications-card';
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function ProfileForm() {
   const t = useTranslations('Settings.profile');
   const { user, profile, refreshProfile } = useAuth();
-  const supabase = createClient();
+  const db = createClient();
 
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [saving, setSaving] = useState(false);
-  const [emailChangePending, setEmailChangePending] = useState(false);
 
   // Seed form state once the profile loads.
   useEffect(() => {
@@ -49,48 +46,23 @@ export function ProfileForm() {
       toast.error(t('nameRequired'));
       return;
     }
-    const trimmedEmail = email.trim();
-    if (!EMAIL_RE.test(trimmedEmail)) {
-      toast.error(t('invalidEmail'));
-      return;
-    }
 
     setSaving(true);
     try {
-      // Persist name to profiles.
-      const { error: updateError } = await supabase
+      // Persist updated display name to profiles in Neon
+      const { error: updateError } = await db
         .from('profiles')
         .update({
           full_name: trimmedName,
         })
         .eq('user_id', user.id);
+
       if (updateError) {
         throw new Error(t('saveFailed', { message: updateError.message }));
       }
 
-      let emailSent = false;
-      if (trimmedEmail.toLowerCase() !== profile.email.toLowerCase()) {
-        const { error: emailError } = await supabase.auth.updateUser({
-          email: trimmedEmail,
-        });
-        if (emailError) {
-          toast.success(t('profileSaved'));
-          toast.error(t('emailChangeFailed', { message: emailError.message }));
-          setSaving(false);
-          await refreshProfile();
-          return;
-        }
-        emailSent = true;
-      }
-
-      setEmailChangePending(emailSent);
       await refreshProfile();
-
-      toast.success(
-        emailSent
-          ? t('profileSavedEmailCheck')
-          : t('profileSaved'),
-      );
+      toast.success(t('profileSaved'));
     } catch (err) {
       const msg = err instanceof Error ? err.message : t('unknownError');
       toast.error(msg);
@@ -101,8 +73,7 @@ export function ProfileForm() {
 
   const dirty =
     !!profile &&
-    (fullName.trim() !== (profile.full_name ?? '') ||
-      email.trim().toLowerCase() !== (profile.email ?? '').toLowerCase());
+    fullName.trim() !== (profile.full_name ?? '');
 
   const joined = user?.created_at
     ? new Date(user.created_at).toLocaleDateString(undefined, {
@@ -134,16 +105,6 @@ export function ProfileForm() {
               </div>
             </div>
 
-            {/* Email change in-flight banner */}
-            {emailChangePending && (
-              <div className="flex items-start gap-3 rounded-lg border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-900 dark:text-amber-200">
-                <Mail className="mt-0.5 size-4 shrink-0" />
-                <div className="space-y-1">
-                  <p className="font-medium">{t('profileSavedEmailCheck')}</p>
-                </div>
-              </div>
-            )}
-
             {/* Name + email fields */}
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
@@ -164,11 +125,13 @@ export function ProfileForm() {
                   id="email"
                   type="email"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  disabled={saving}
+                  disabled={true}
+                  className="bg-muted text-muted-foreground cursor-not-allowed"
                   autoComplete="email"
                 />
+                <p className="text-[11px] text-muted-foreground">
+                  Email is managed by your Clerk identity provider.
+                </p>
               </div>
             </div>
 

@@ -59,7 +59,6 @@ export function ConversationList({
     { label: t("filterAll"), value: "all" },
     { label: t("filterUnread"), value: "unread" },
     { label: t("filterWaiting"), value: "waiting" },
-    { label: t("filterUnassigned"), value: "unassigned" },
     { label: t("filterExpiring"), value: "expiring" },
     { label: t("filterOpen"), value: "open" },
     { label: t("filterPending"), value: "pending" },

@@ -422,13 +422,63 @@ export async function sendTextMessage(
 
 export type MediaKind = 'image' | 'video' | 'document' | 'audio'
 
+export interface UploadMediaToMetaArgs {
+  phoneNumberId: string
+  accessToken: string
+  file: Blob | File | Buffer | Uint8Array
+  mimeType: string
+  filename?: string
+}
+
+/**
+ * Upload a media binary directly to Meta's Cloud API (`POST /{phoneNumberId}/media`).
+ * Returns the Meta media ID (`id`) which can be used to send media messages
+ * without requiring an externally-reachable public URL.
+ */
+export async function uploadMediaToMeta(
+  args: UploadMediaToMetaArgs,
+): Promise<{ mediaId: string }> {
+  const { phoneNumberId, accessToken, file, mimeType, filename } = args
+  const url = `${META_API_BASE}/${phoneNumberId}/media`
+
+  const formData = new FormData()
+  formData.append('messaging_product', 'whatsapp')
+  formData.append('type', mimeType)
+
+  let blobPart: any = file
+  if (!(file instanceof Blob)) {
+    blobPart = new Blob([file as any], { type: mimeType })
+  }
+  formData.append('file', blobPart, filename || 'file')
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: formData,
+  })
+
+  if (!response.ok) {
+    await throwMetaError(response, `Meta media upload failed: ${response.status}`)
+  }
+
+  const data = (await response.json()) as { id?: string }
+  if (!data.id) {
+    throw new Error('Meta media upload did not return an id')
+  }
+  return { mediaId: data.id }
+}
+
 export interface SendMediaMessageArgs {
   phoneNumberId: string
   accessToken: string
   to: string
   kind: MediaKind
   /** Public URL Meta fetches at send time. */
-  link: string
+  link?: string
+  /** Direct Meta media ID from uploadMediaToMeta. */
+  mediaId?: string
   /** Optional caption — Meta caps at 1024 chars. Documents + images + videos accept it; audio does NOT. */
   caption?: string
   /** Document-only. Shown in the recipient's chat as the file name. Ignored for image/video/audio. */
@@ -437,28 +487,34 @@ export interface SendMediaMessageArgs {
 }
 
 /**
- * Send an image, video, document, or audio (voice note) via a public URL.
+ * Send an image, video, document, or audio (voice note) via a public URL or Meta media ID.
  *
  * Used by the Flows engine's `send_media` node and the inbox composer's
- * agent-initiated media sends. Mirrors `sendTextMessage` — single fetch,
- * throws on non-2xx, returns Meta's message id.
- *
- * Audio is special-cased: Meta rejects `caption` and `filename` on audio
- * messages, so we send `{ link }` only. WhatsApp auto-renders an
- * OGG/Opus file as a playable voice note (waveform) rather than a file
- * attachment.
+ * agent-initiated media sends. Supports both direct Meta media IDs (`{ id }`)
+ * and public URLs (`{ link }`).
  */
 export async function sendMediaMessage(
   args: SendMediaMessageArgs,
 ): Promise<MetaSendResult> {
-  const { phoneNumberId, accessToken, to, kind, link, caption, filename, contextMessageId } = args
-  if (!link) throw new Error('sendMediaMessage requires a link.')
-  const url = `${META_API_BASE}/${phoneNumberId}/messages`
+  const { phoneNumberId, accessToken, to, kind, link, mediaId, caption, filename, contextMessageId } = args
+  
+  const media: Record<string, unknown> = {}
+  if (mediaId) {
+    media.id = mediaId
+  } else if (link) {
+    const proxyMatch = link.match(/\/api\/whatsapp\/media\/(\d+)/)
+    if (proxyMatch) {
+      media.id = proxyMatch[1]
+    } else {
+      media.link = link
+    }
+  } else {
+    throw new Error('sendMediaMessage requires a link or media id.')
+  }
 
   // Audio accepts neither caption nor filename per Meta's spec — adding
   // either yields a 400. image/video/document accept a caption; only
   // document accepts a filename.
-  const media: Record<string, unknown> = { link }
   if (caption && kind !== 'audio') media.caption = caption
   if (kind === 'document' && filename) media.filename = filename
 
@@ -470,6 +526,7 @@ export async function sendMediaMessage(
   }
   if (contextMessageId) body.context = { message_id: contextMessageId }
 
+  const url = `${META_API_BASE}/${phoneNumberId}/messages`
   const response = await fetch(url, {
     method: 'POST',
     headers: {

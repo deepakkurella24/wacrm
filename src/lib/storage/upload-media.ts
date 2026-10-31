@@ -1,4 +1,3 @@
-import { createClient } from "@/lib/supabase/client";
 import { getT } from "@/lib/i18n/translate";
 
 const t = getT("LibErrors");
@@ -98,58 +97,34 @@ export async function uploadAccountMedia(
   bucket: string,
   file: File,
 ): Promise<UploadAccountMediaResult> {
-  const supabase = createClient();
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('bucket', bucket);
 
-  const {
-    data: { user },
-    error: userErr,
-  } = await supabase.auth.getUser();
-  if (userErr || !user) {
-    throw new Error(t("upload.notSignedIn"));
-  }
-
-  // Resolve account_id so the path is account-scoped (matches the
-  // bucket's RLS write policy from migration 020/023). User-scoped
-  // paths would be rejected.
-  const { data: profile, error: profileErr } = await supabase
-    .from("profiles")
-    .select("account_id")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (profileErr || !profile?.account_id) {
-    throw new Error(t("upload.accountUnresolved"));
-  }
-
-  const path = buildMediaPath(profile.account_id as string, file.name);
-  const { error: upErr } = await supabase.storage.from(bucket).upload(path, file, {
-    cacheControl: "3600",
-    upsert: false,
-    contentType: file.type,
+  const response = await fetch('/api/whatsapp/media', {
+    method: 'POST',
+    body: formData,
   });
-  if (upErr) throw new Error(upErr.message);
 
-  const {
-    data: { publicUrl },
-  } = supabase.storage.from(bucket).getPublicUrl(path);
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data?.error || t('upload.notSignedIn'));
+  }
 
-  return { publicUrl, path };
+  const json = (await response.json()) as { publicUrl: string; path: string };
+  return {
+    publicUrl: json.publicUrl,
+    path: json.path,
+  };
 }
 
 /**
- * Delete a previously-uploaded object. Used to GC media that was staged
- * (uploaded) but never sent — a cancelled draft or a failed Meta send —
- * so abandoned attachments don't accumulate in the public bucket. The
- * DELETE is gated by the same account-scoped RLS policy as the upload,
- * so a caller can only remove objects under their own account folder.
- *
- * Best-effort: callers fire-and-forget and swallow errors (a missed
- * delete is a storage nit, not something to surface to the user).
+ * Delete a previously-uploaded object. Best-effort cleanup:
+ * Meta media IDs automatically expire after 30 days.
  */
 export async function deleteAccountMedia(
-  bucket: string,
-  path: string,
+  _bucket: string,
+  _path: string,
 ): Promise<void> {
-  const supabase = createClient();
-  const { error } = await supabase.storage.from(bucket).remove([path]);
-  if (error) throw new Error(error.message);
+  // No-op for direct Meta Cloud API uploads
 }

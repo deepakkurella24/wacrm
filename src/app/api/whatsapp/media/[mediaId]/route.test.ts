@@ -25,6 +25,11 @@ vi.mock('next/server', () => ({
 vi.mock('@/lib/media/b2-media-service', () => ({
   requestB2DownloadUrl: async (objectKey: string) =>
     `https://b2.example.com/download/${objectKey}?expires=900`,
+  requestB2UploadUrl: async () => ({
+    upload_url: 'https://b2.example.com/upload',
+    object_key: 'whatsapp-media/lazy/test.jpg',
+  }),
+  uploadToB2: async () => {},
 }))
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -205,5 +210,26 @@ describe('GET /api/whatsapp/media/[mediaId]', () => {
 
     const res = await call('12345')
     expect(res.status).toBe(403)
+  })
+
+  it('handles numeric Meta media ID and WAMID without uuid cast failures', async () => {
+    vi.stubEnv('FASTAPI_BASE_URL', 'http://127.0.0.1:8000')
+    h.mediaKey = 'whatsapp-media/2225235245071102/photo.jpg'
+
+    const resNum = await call('2225235245071102')
+    expect(resNum.status).toBe(307)
+    expect(resNum.headers.get('location')).toContain('whatsapp-media/2225235245071102/photo.jpg')
+
+    const resWamid = await call('wamid.HBgMOTE3ODQyNTIzODM1FQIAEhggQUNDMUE4ODJCRDEwNDc5MTk5NDA0NzAxN0QxQ0U4NkIA')
+    expect(resWamid.status).toBe(307)
+  })
+
+  it('directly serves Backblaze B2 object keys starting with whatsapp-media/', async () => {
+    vi.stubEnv('FASTAPI_BASE_URL', 'http://127.0.0.1:8000')
+    h.mediaKey = null
+
+    const res = await call('whatsapp-media%2Fdirect%2Ffile.png')
+    expect(res.status).toBe(307)
+    expect(res.headers.get('location')).toContain('whatsapp-media/direct/file.png')
   })
 })

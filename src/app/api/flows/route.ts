@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
-import { getFlowTemplate } from '@/lib/flows/templates'
 import { getT } from '@/lib/i18n/translate'
 
 const t = getT('Api')
@@ -45,7 +44,10 @@ export async function GET() {
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
-  return NextResponse.json({ flows: data ?? [] })
+  const flows = ((data as any[]) ?? []).filter(
+    (f: any) => !['renewals on my number', 'my reenewals', 'my renewals', 'my policies', 'my policy', 'welcome menu'].includes((f.name || '').trim().toLowerCase())
+  )
+  return NextResponse.json({ flows })
 }
 
 export async function POST(request: Request) {
@@ -86,13 +88,6 @@ export async function POST(request: Request) {
         description?: string | null
         trigger_type?: 'keyword' | 'first_inbound_message' | 'manual'
         trigger_config?: Record<string, unknown>
-        /**
-         * If set, clone the matching template's name + trigger +
-         * entry_node_id + nodes[] into a fresh draft for this user.
-         * `name` from the body overrides the template default if
-         * provided.
-         */
-        template_slug?: string
       }
     | null
   if (!body) {
@@ -101,59 +96,7 @@ export async function POST(request: Request) {
 
   const admin = supabaseAdmin()
 
-  // -------- Template clone path --------
-  if (body.template_slug) {
-    const template = getFlowTemplate(body.template_slug)
-    if (!template) {
-      return NextResponse.json(
-        { error: t('flows.unknownTemplate', { slug: String(body.template_slug) }) },
-        { status: 400 },
-      )
-    }
-    const { data: flow, error: flowErr } = await admin
-      .from('flows')
-      .insert({
-        user_id: userId,
-        account_id: accountId,
-        name: body.name?.trim() || template.name,
-        description: template.description,
-        status: 'draft',
-        trigger_type: template.trigger_type,
-        trigger_config: template.trigger_config,
-        entry_node_id: template.entry_node_id,
-      })
-      .select()
-      .single()
-    if (flowErr || !flow) {
-      return NextResponse.json(
-        { error: flowErr?.message ?? t('flows.insertFailed') },
-        { status: 500 },
-      )
-    }
-    if (template.nodes.length > 0) {
-      const { error: nodesErr } = await admin.from('flow_nodes').insert(
-        template.nodes.map((n) => ({
-          flow_id: flow.id,
-          node_key: n.node_key,
-          node_type: n.node_type,
-          config: n.config,
-        })),
-      )
-      if (nodesErr) {
-        // Roll back the parent flow so a half-cloned template doesn't
-        // sit as an empty draft. CASCADE on flow_id removes the
-        // (probably zero) nodes too.
-        await admin.from('flows').delete().eq('id', flow.id)
-        return NextResponse.json(
-          { error: nodesErr.message },
-          { status: 500 },
-        )
-      }
-    }
-    return NextResponse.json({ flow }, { status: 201 })
-  }
-
-  // -------- Plain (empty) create path --------
+  // Plain (empty) create path
   if (!body.name?.trim()) {
     return NextResponse.json({ error: t('flows.nameRequired') }, { status: 400 })
   }
